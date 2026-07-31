@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -eu
+
+wrapper_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if ! command -v node >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+spine-app: Node.js was not found.
+
+Install Node.js 22 or newer from https://nodejs.org/, then run this command
+again. SpineCodex itself can then be installed with:
+
+  npm install -g @spinejit/spine-codex@latest
+EOF
+  exit 1
+fi
+
+exec node "$wrapper_dir/spine-app.mjs" "$@"

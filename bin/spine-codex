@@ -1,0 +1,7 @@
+#!/bin/zsh
+
+set -eu
+
+readonly SPINE_CODEX_BIN="${SPINE_CODEX_BINARY:-/opt/homebrew/bin/spine-codex}"
+
+exec "${SPINE_CODEX_BIN}" --disable image_generation "$@"

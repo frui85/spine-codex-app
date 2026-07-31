@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm run check
+      - run: npm run build:macos
+      - name: Verify release contains no bundled SpineCodex binary
+        run: |
+          if find .build -type f -size +20M ! -name node -print | grep -q .; then
+            echo "Unexpected large bundled binary" >&2
+            exit 1
+          fi
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME:-v0.2.1}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.dmg dist/*.sha256 --clobber
+          else
+            gh release create "$tag" dist/*.dmg dist/*.sha256 \
+              --title "$tag" --generate-notes
+          fi

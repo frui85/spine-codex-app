@@ -1,0 +1,6 @@
+.DS_Store
+.build/
+dist/
+*.dmg
+*.sha256
+node_modules/

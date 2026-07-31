@@ -1,0 +1,23 @@
+{
+  "name": "spine-codex-app",
+  "version": "0.2.1",
+  "private": true,
+  "description": "A lightweight macOS launcher that adds SpineCodex controls and Spine Tree UI to Codex Desktop.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/izumedonabe/spine-codex-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/izumedonabe/spine-codex-app/issues"
+  },
+  "homepage": "https://github.com/izumedonabe/spine-codex-app#readme",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "check": "node --check spine-app.mjs && node --check spine-view.js && node --check spine-electron-main-hook.cjs && node --test test/preflight.test.mjs test/release-boundary.test.mjs && node test/renderer.test.mjs && node test/ssh-hook.test.mjs",
+    "build:macos": "node scripts/build-macos-release.mjs --all"
+  }
+}
