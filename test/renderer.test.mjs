@@ -108,6 +108,7 @@ vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
 assert.equal(api.version, "0.2.1");
+assert.equal(api.revision, 2);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -126,6 +127,10 @@ assert.equal(api.refreshLocale(), false);
 assert.equal(api.getStats().locale, "en");
 assert.match(source, /addEventListener\("languagechange", onLanguageChange\)/);
 assert.match(source, /removeEventListener\("languagechange", onLanguageChange\)/);
+assert.match(source, /vscode:\/\/codex\/\$\{method\}/);
+assert.match(source, /key: "localeOverride"/);
+assert.match(source, /event\.data\?\.type === "fetch-response"/);
+assert.match(source, /data-settings-panel-slug="general-settings"/);
 assert.match(source, /function nativeTreeMotionSpec/);
 assert.match(source, /--transition-duration-relaxed/);
 assert.match(source, /--cubic-enter/);
@@ -837,6 +842,9 @@ assert.deepEqual(api.getStats(), {
   settingsSaving: false,
   locale: "en",
   localeSource: "en",
+  localeOverride: undefined,
+  localeSettingLoaded: false,
+  localeSyncPending: false,
   supportedLocales: [
     "en",
     "zh-Hans",

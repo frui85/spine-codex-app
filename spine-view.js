@@ -23,6 +23,7 @@
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
   const VERSION = "0.2.1";
+  const RENDERER_REVISION = 2;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -947,10 +948,16 @@
     }),
   });
 
-  if (window[GLOBAL_KEY]?.version === VERSION) return VERSION;
+  if (
+    window[GLOBAL_KEY]?.version === VERSION &&
+    window[GLOBAL_KEY]?.revision === RENDERER_REVISION
+  ) return VERSION;
   try {
     window[GLOBAL_KEY]?.destroy?.();
   } catch {}
+
+  let localeOverride;
+  let localeSettingLoaded = false;
 
   const state = {
     snapshots: readSnapshotCache(),
@@ -1002,6 +1009,9 @@
     lastActiveHostId: "local",
     requestSequence: 0,
     pendingRequests: new Map(),
+    pendingFetchRequests: new Map(),
+    localeSyncTimer: 0,
+    localeSyncInFlight: false,
     snapshotCacheDirty: false,
     snapshotWriteHandle: 0,
     snapshotWriteKind: null,
@@ -1316,6 +1326,9 @@
   }
 
   function codexLocaleSource() {
+    if (localeSettingLoaded && typeof localeOverride === "string" && localeOverride.trim()) {
+      return localeOverride.trim();
+    }
     return (
       (typeof navigator === "object" ? navigator.language?.trim?.() : "") ||
       document.documentElement?.getAttribute?.("lang")?.trim() ||
@@ -1422,6 +1435,14 @@
 
   function onLanguageChange() {
     queueMicrotask(refreshLocale);
+  }
+
+  function applyLocaleSetting(value) {
+    localeOverride = typeof value === "string" && value.trim()
+      ? value.trim()
+      : null;
+    localeSettingLoaded = true;
+    return refreshLocale();
   }
 
   function normalizeThreadId(value) {
@@ -4629,6 +4650,77 @@
     return true;
   }
 
+  function settleCodexFetchResponse(data) {
+    if (data?.type !== "fetch-response") return false;
+    const requestId = data.requestId == null ? null : String(data.requestId);
+    const pending = requestId ? state.pendingFetchRequests.get(requestId) : null;
+    if (!pending) return false;
+    state.pendingFetchRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (data.responseType === "error" || data.error) {
+      pending.reject(new Error(data.error ?? `Codex request failed (${data.status ?? "unknown"})`));
+      return true;
+    }
+    try {
+      pending.resolve(JSON.parse(data.bodyJsonString || "null"));
+    } catch (error) {
+      pending.reject(error);
+    }
+    return true;
+  }
+
+  function sendCodexFetchRequest(method, body) {
+    const bridge = window.electronBridge;
+    if (typeof bridge?.sendMessageFromView !== "function") {
+      return Promise.reject(new Error("Codex renderer bridge is unavailable"));
+    }
+    const requestId = `spine-codex-fetch-${Date.now()}-${++state.requestSequence}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        state.pendingFetchRequests.delete(requestId);
+        reject(new Error(`${method} timed out`));
+      }, 5_000);
+      state.pendingFetchRequests.set(requestId, { resolve, reject, timeout });
+      Promise.resolve(bridge.sendMessageFromView({
+        type: "fetch",
+        requestId,
+        method: "POST",
+        url: `vscode://codex/${method}`,
+        body: JSON.stringify(body ?? {}),
+      })).catch((error) => {
+        const pending = state.pendingFetchRequests.get(requestId);
+        if (!pending) return;
+        state.pendingFetchRequests.delete(requestId);
+        clearTimeout(pending.timeout);
+        reject(error);
+      });
+    });
+  }
+
+  async function syncLocaleSetting() {
+    if (state.localeSyncInFlight || state.destroyed) return false;
+    state.localeSyncInFlight = true;
+    try {
+      const result = await sendCodexFetchRequest("get-setting", {
+        key: "localeOverride",
+      });
+      return applyLocaleSetting(result?.value ?? null);
+    } catch {
+      return false;
+    } finally {
+      state.localeSyncInFlight = false;
+    }
+  }
+
+  function scheduleLocaleSettingSync(delay = 0) {
+    if (state.destroyed) return;
+    if (state.localeSyncTimer) clearTimeout(state.localeSyncTimer);
+    state.localeSyncTimer = setTimeout(() => {
+      state.localeSyncTimer = 0;
+      void syncLocaleSetting();
+    }, Math.max(0, delay));
+  }
+
   function sendAppServerRequest(hostId, method, params) {
     const bridge = window.electronBridge;
     if (typeof bridge?.sendMessageFromView !== "function") {
@@ -5025,6 +5117,14 @@
     if ((event.metaKey || event.ctrlKey) && event.key === ",") {
       scheduleSettingsMount(30);
     }
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      document.querySelector?.(
+        'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
+      )
+    ) {
+      scheduleLocaleSettingSync(250);
+    }
   }
 
   function ingest(message) {
@@ -5048,7 +5148,21 @@
   }
 
   function onMessage(event) {
-    if (!settleAppServerResponse(event.data)) ingest(event.data);
+    const settledFetch = settleCodexFetchResponse(event.data);
+    const settledAppServer = settleAppServerResponse(event.data);
+    if (!settledFetch && !settledAppServer) ingest(event.data);
+    if (
+      !settledFetch &&
+      event.data?.type === "fetch-response" &&
+      document.querySelector?.(
+        'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
+      )
+    ) {
+      // Codex keeps its runtime language in the structured localeOverride setting.
+      // Its own set-setting response is the earliest stable signal that the value
+      // may have changed; browser languagechange/html[lang] are not updated reliably.
+      scheduleLocaleSettingSync();
+    }
   }
 
   function activateThread(threadId) {
@@ -5079,6 +5193,13 @@
   function onSidebarClick(event) {
     const target = event.target;
     maybeScheduleSettingsFromClick(target);
+    if (document.querySelector?.(
+      'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
+    )) {
+      // Fallback for Codex builds that do not forward the originating fetch response.
+      // This is event-bound and debounced; there is no timer or document observer at rest.
+      scheduleLocaleSettingSync(250);
+    }
     const clickedButton = target?.nodeType === Node.ELEMENT_NODE
       ? target.closest?.("button")
       : target?.parentElement?.closest?.("button");
@@ -5209,6 +5330,7 @@
     refreshLocale();
     connectLocaleObserver();
     window.addEventListener("languagechange", onLanguageChange);
+    void syncLocaleSetting();
     state.activeThreadId = selectedThreadId();
     connectSidebarObserver();
     connectThreadObserver();
@@ -5253,6 +5375,7 @@
 
   const api = Object.freeze({
     version: VERSION,
+    revision: RENDERER_REVISION,
     ingest,
     projectSnapshot,
     getStats: () => ({
@@ -5277,6 +5400,10 @@
       settingsSaving: state.settingsSaving,
       locale: state.locale,
       localeSource: state.localeSource,
+      localeOverride: localeSettingLoaded ? localeOverride : undefined,
+      localeSettingLoaded,
+      localeSyncPending:
+        state.localeSyncInFlight || state.localeSyncTimer !== 0,
       supportedLocales: Object.keys(UI_MESSAGES),
       detailOpen: state.detailRequested,
       detailMounted: Boolean(state.detailUi?.host.isConnected),
@@ -5368,11 +5495,17 @@
       stopNativeSubagentListObserver();
       stopNativeSubagentTitleHook();
       if (state.settingsSavedTimer) clearTimeout(state.settingsSavedTimer);
+      if (state.localeSyncTimer) clearTimeout(state.localeSyncTimer);
       for (const pending of state.pendingRequests.values()) {
         clearTimeout(pending.timeout);
         pending.reject(new Error("Spine settings renderer was destroyed"));
       }
       state.pendingRequests.clear();
+      for (const pending of state.pendingFetchRequests.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("Spine locale renderer was destroyed"));
+      }
+      state.pendingFetchRequests.clear();
       closeWorkspaceDetail(false, true);
       state.ui?.host.remove();
       state.settingsSection?.remove();

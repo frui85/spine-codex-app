@@ -84,9 +84,13 @@ expand just that section.
 
 ## Language
 
-Spine View follows Codex/Electron's `navigator.language` value rather than the
-stale `html[lang]` attribute or the macOS locale. (`html[lang]` remains a
-fallback for older App builds.)
+Spine View reads Codex's structured `localeOverride` setting through the native
+renderer bridge. This is the same value changed by **Settings → General →
+Language** and is the runtime source of truth; Chromium's `navigator.language`
+and the frequently stale `html[lang]` attribute are not treated as an explicit
+Codex language selection. When Codex is set to automatic language detection,
+`navigator.language` is used, with `html[lang]` retained only as an older-build
+fallback.
 Changing the App language immediately re-renders the tree, tooltips, node and
 Spawn detail, duration and token formatting, accessibility labels, and the
 Spine settings section. Snapshot caches contain only structured Spine data, so
@@ -96,9 +100,11 @@ The bundled catalog includes English, Simplified Chinese, Traditional Chinese,
 Japanese, Korean, German, French, Spanish, Brazilian Portuguese, and Russian.
 Regional variants resolve to their language catalog (`pt-PT` currently uses
 the Portuguese catalog); other Codex locales fall back to English. Locale
-changes are detected through the standard `languagechange` event, with one
-attribute observer on `document.documentElement` only as a compatibility
-fallback; there is no language poll or page-wide observer.
+changes made in Codex settings are detected from the structured completion of
+Codex's own settings request and followed by one exact `localeOverride` read.
+The standard `languagechange` event and one attribute observer on
+`document.documentElement` remain compatibility fallbacks for automatic mode;
+there is no language poll or page-wide observer.
 All quantities, compact token counts, clock times, durations, and plural forms
 use the matching `Intl` locale.
 

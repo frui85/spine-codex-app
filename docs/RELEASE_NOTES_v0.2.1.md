@@ -24,7 +24,8 @@ The wrapper discovers both paths automatically. First run reports every missing 
 - Interactive Spine Tree embedded in pinned and floating Codex summary surfaces
 - Native right-sidebar node details, compaction history, Spawn navigation, and child naming
 - Local and SSH-host SpineCodex selection with truthful v0.2.1 compatibility checks
-- Ten-locale i18n and Codex-native motion/reduced-motion behavior
+- Ten-locale i18n synchronized with Codex's runtime language setting, plus
+  Codex-native motion/reduced-motion behavior
 - Architecture-specific standalone wrapper DMGs with a checksum-verified Node runtime
 - No `app.asar` patch, watchdog, bundled SpineCodex, or bundled Codex Desktop
 
