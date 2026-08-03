@@ -182,6 +182,13 @@ page open. Discovery is locale-independent: the wrapper finds
 the native group through its structured `data-slot` contract and identifies a
 child from the alphanumeric transaction fragment derived from `callId` plus its
 numeric ordinal. Chinese or English labels are never used as navigation keys.
+The renderer also consumes the structured `rawResponseItem/completed` event for
+the exact `spine.spawn` function call. At that point it synchronously persists
+the parent thread ID, call ID, ordinal, and task summary—before it depends on
+live Spawn progress or a settled tree receipt. Prompts and child output are not
+stored. This bounded, 30-day cache preserves native child-agent names when the
+parent turn is interrupted or the App restarts; later progress enriches the
+same record with child-thread and agent-path metadata.
 The same structured identity also maps Codex's independently generated
 `Spawn call… <ordinal>` child-detail heading back to the Spine task summary.
 Both the native list row and the child-detail header therefore show names such

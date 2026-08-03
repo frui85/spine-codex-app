@@ -108,7 +108,7 @@ vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
 assert.equal(api.version, "0.2.1");
-assert.equal(api.revision, 2);
+assert.equal(api.revision, 3);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -171,6 +171,8 @@ assert.match(source, /subagentTitleObserver/);
 assert.match(source, /nativeSubagentOverviewRoot/);
 assert.match(source, /connectNativeSubagentListObserver/);
 assert.match(source, /subagentListObserver/);
+assert.match(source, /rawResponseItem\/completed/);
+assert.match(source, /SPAWN_INTENT_CACHE_KEY/);
 assert.match(
   source,
   /thread-summary-panel-item-group/,
@@ -260,6 +262,64 @@ const snapshot = {
 assert.equal(
   api.ingest({ type: "mcp-notification", method: "turn/spineTree/updated", params: snapshot }),
   true,
+);
+assert.equal(
+  api.ingest({
+    type: "mcp-notification",
+    method: "rawResponseItem/completed",
+    hostId: "local",
+    params: {
+      threadId: snapshot.threadId,
+      turnId: "turn-interrupted",
+      item: {
+        type: "function_call",
+        namespace: "spine",
+        name: "spawn",
+        call_id: "call_orphan-123",
+        arguments: JSON.stringify({
+          tasks: [
+            { summary: "Recover interrupted branch", prompt: "must not be stored" },
+            { summary: "Persist before progress", prompt: "private branch prompt" },
+          ],
+        }),
+      },
+    },
+  }),
+  true,
+);
+const interruptedIntents = api.exportSpawnIntents();
+assert.equal(interruptedIntents.length, 1);
+assert.equal(interruptedIntents[0][1][0].callId, "call_orphan-123");
+assert.deepEqual(
+  interruptedIntents[0][1][0].tasks.map(({ ordinal, summary, threadId }) => ({
+    ordinal,
+    summary,
+    threadId,
+  })),
+  [
+    { ordinal: 0, summary: "Recover interrupted branch", threadId: null },
+    { ordinal: 1, summary: "Persist before progress", threadId: null },
+  ],
+);
+const spawnIntentPayload = storage.get("spine-codex.view.spawn-intents.v1");
+assert.ok(spawnIntentPayload);
+assert.doesNotMatch(spawnIntentPayload, /must not be stored|private branch prompt/);
+assert.equal(
+  api.ingest({
+    type: "mcp-notification",
+    method: "rawResponseItem/completed",
+    params: {
+      threadId: snapshot.threadId,
+      item: {
+        type: "function_call",
+        namespace: "other",
+        name: "spawn",
+        call_id: "call_wrong",
+        arguments: "{}",
+      },
+    },
+  }),
+  false,
 );
 const sameSequenceSnapshot = {
   ...snapshot,
@@ -918,6 +978,14 @@ api.destroy();
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
 assert.equal(restoredApi.version, "0.2.1");
+assert.equal(restoredApi.revision, 3);
+assert.equal(
+  restoredApi.exportSpawnIntents()[0][1].some(
+    (intent) => intent.callId === "call_orphan-123" &&
+      intent.tasks[0].summary === "Recover interrupted branch",
+  ),
+  true,
+);
 documentListeners.get("click")({
   target: {
     nodeType: Node.ELEMENT_NODE,
@@ -938,9 +1006,10 @@ assert.equal(restoredApi.getStats().threads, 31);
 assert.equal(restoredApi.clearCache(), true);
 assert.equal(restoredApi.getStats().threads, 0);
 assert.equal(storage.has("spine-codex.view.snapshots.v1"), false);
+assert.equal(storage.has("spine-codex.view.spawn-intents.v1"), false);
 assert.equal(storage.has("spine-codex.view.thread-aliases"), false);
 restoredApi.destroy();
 
 console.log(
-  "spine_view.js sequence, projection, hidden-detail persistence, spawn navigation and detail-title naming, settings integration contract, long-tree persistence, click switching, TTL, and clear-cache checks passed",
+  "spine_view.js sequence, projection, interrupted Spawn intent persistence, spawn navigation and detail-title naming, settings integration contract, long-tree persistence, click switching, TTL, and clear-cache checks passed",
 );

@@ -63,7 +63,7 @@ Click a task and its full context opens as a normal page in Codex's existing rig
 
 ## Spawn branches stay connected
 
-Live Spawn progress is reconciled with the final closed Spine nodes. Child agents inherit the task summary as their display name, and **Open subagent** takes you to the corresponding native Codex agent history.
+Live Spawn progress is reconciled with the final closed Spine nodes. Child agents inherit the task summary as their display name, and **Open subagent** takes you to the corresponding native Codex agent history. The structured Spawn intent is saved before progress begins, so task names survive an interrupted parent turn or an App restart.
 
 ![Codex's native Subagents page alongside the embedded Spine Tree](docs/media/spine-subagents.png)
 

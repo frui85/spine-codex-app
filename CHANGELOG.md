@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Persists structured Spine Spawn task names before live progress, preserving native child-agent list and header names across interrupted parent turns and App restarts.
+
 ## v0.2.1 — 2026-07-31
 
 First public release, tracking SpineCodex v0.2.1.

@@ -4,6 +4,7 @@
   const GLOBAL_KEY = "__spineCodexViewV1";
   const TREE_METHOD = "turn/spineTree/updated";
   const SPAWN_METHOD = "turn/spineSpawnProgress/updated";
+  const RAW_RESPONSE_ITEM_METHOD = "rawResponseItem/completed";
   const SPINE_FEATURE_PREFIX = /^(?:spine_|spinetree_)/;
   const SPINE_STABLE_SETTINGS_FEATURES = new Set([
     "spine_jit",
@@ -12,7 +13,9 @@
   const SETTINGS_SECTION_ID = "spine-codex-settings";
   const SNAPSHOT_CACHE_KEY = "spine-codex.view.snapshots.v1";
   const THREAD_ALIASES_KEY = "spine-codex.view.thread-aliases";
+  const SPAWN_INTENT_CACHE_KEY = "spine-codex.view.spawn-intents.v1";
   const SNAPSHOT_CACHE_VERSION = 1;
+  const SPAWN_INTENT_CACHE_VERSION = 1;
   const SNAPSHOT_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
   const MAX_PERSISTED_CACHE_CHARS = 2_500_000;
   const MAX_PERSISTED_NODE_COUNT = 2_000;
@@ -20,10 +23,14 @@
   const MAX_PERSISTED_MEMORY_SUMMARY_CHARS = 2_000;
   const MAX_THREADS = 32;
   const MAX_THREAD_ALIASES = 64;
+  const MAX_SPAWN_INTENT_THREADS = 32;
+  const MAX_SPAWN_INTENTS_PER_THREAD = 64;
+  const MAX_SPAWN_INTENT_TASKS = 16;
+  const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
   const VERSION = "0.2.1";
-  const RENDERER_REVISION = 2;
+  const RENDERER_REVISION = 3;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -962,6 +969,7 @@
   const state = {
     snapshots: readSnapshotCache(),
     spawns: new Map(),
+    spawnIntents: readSpawnIntentCache(),
     namedSpawnThreads: new Set(),
     namingSpawnThreads: new Set(),
     rows: new Map(),
@@ -1120,6 +1128,56 @@
     };
   }
 
+  function normalizeSpawnTarget(target) {
+    if (!target || typeof target !== "object") return null;
+    const callId = typeof target.callId === "string" ? target.callId.trim() : "";
+    const ordinal = Number(target.ordinal);
+    const summary = typeof target.summary === "string"
+      ? target.summary.replace(/\s+/g, " ").trim().slice(0, 1_000)
+      : "";
+    if (!callId || !Number.isInteger(ordinal) || ordinal < 0 || !summary) return null;
+    return {
+      callId,
+      ordinal,
+      threadId: normalizeThreadId(target.threadId),
+      agentPath: typeof target.agentPath === "string" && target.agentPath
+        ? target.agentPath.slice(0, 1_000)
+        : null,
+      summary,
+      observedAtMs: normalizeTimestamp(target.observedAtMs),
+      startedAtMs: normalizeTimestamp(target.startedAtMs),
+      completedAtMs: normalizeTimestamp(target.completedAtMs),
+    };
+  }
+
+  function normalizeSpawnIntent(intent, cachedAt = Date.now()) {
+    if (!intent || typeof intent !== "object") return null;
+    const threadId = normalizeThreadId(intent.threadId);
+    const callId = typeof intent.callId === "string" ? intent.callId.trim() : "";
+    if (!threadId || !callId || !Array.isArray(intent.tasks)) return null;
+    const tasks = intent.tasks
+      .slice(0, MAX_SPAWN_INTENT_TASKS)
+      .map((task, ordinal) => normalizeSpawnTarget({
+        ...task,
+        callId,
+        ordinal: Number.isInteger(Number(task?.ordinal))
+          ? Number(task.ordinal)
+          : ordinal,
+      }))
+      .filter(Boolean);
+    if (!tasks.length) return null;
+    return {
+      threadId,
+      turnId: typeof intent.turnId === "string" ? intent.turnId.slice(0, 256) : "",
+      callId,
+      hostId: typeof intent.hostId === "string" && intent.hostId
+        ? intent.hostId.slice(0, 256)
+        : null,
+      tasks,
+      cachedAt: Number.isFinite(Number(cachedAt)) ? Number(cachedAt) : Date.now(),
+    };
+  }
+
   function normalizeTimestamp(value) {
     const numeric = Number(value);
     return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : null;
@@ -1268,6 +1326,73 @@
     } catch {
       return new Map();
     }
+  }
+
+  function readSpawnIntentCache() {
+    try {
+      const payload = JSON.parse(localStorage.getItem(SPAWN_INTENT_CACHE_KEY) || "null");
+      if (
+        payload?.version !== SPAWN_INTENT_CACHE_VERSION ||
+        !Array.isArray(payload.entries)
+      ) {
+        return new Map();
+      }
+      const result = new Map();
+      const now = Date.now();
+      for (const entry of payload.entries.slice(-MAX_SPAWN_INTENT_THREADS)) {
+        const threadId = normalizeThreadId(entry?.[0]);
+        if (!threadId || !Array.isArray(entry?.[1])) continue;
+        const intents = new Map();
+        for (const raw of entry[1].slice(-MAX_SPAWN_INTENTS_PER_THREAD)) {
+          const cachedAt = Number(raw?.cachedAt);
+          if (
+            !Number.isFinite(cachedAt) ||
+            cachedAt <= 0 ||
+            now - cachedAt > SNAPSHOT_CACHE_MAX_AGE_MS
+          ) {
+            continue;
+          }
+          const intent = normalizeSpawnIntent(raw, cachedAt);
+          if (!intent || intent.threadId !== threadId) continue;
+          intents.delete(intent.callId);
+          intents.set(intent.callId, intent);
+        }
+        if (intents.size) result.set(threadId, intents);
+      }
+      return result;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function writeSpawnIntentCache() {
+    try {
+      const entries = [...state.spawnIntents.entries()]
+        .slice(-MAX_SPAWN_INTENT_THREADS)
+        .map(([threadId, intents]) => [
+          threadId,
+          [...intents.values()].slice(-MAX_SPAWN_INTENTS_PER_THREAD),
+        ])
+        .filter(([, intents]) => intents.length);
+      let payload = JSON.stringify({
+        version: SPAWN_INTENT_CACHE_VERSION,
+        entries,
+      });
+      while (payload.length > MAX_SPAWN_INTENT_CACHE_CHARS && entries.length) {
+        if (entries.length > 1) {
+          entries.shift();
+        } else {
+          entries[0][1].shift();
+          if (!entries[0][1].length) entries.shift();
+        }
+        payload = JSON.stringify({
+          version: SPAWN_INTENT_CACHE_VERSION,
+          entries,
+        });
+      }
+      if (entries.length) localStorage.setItem(SPAWN_INTENT_CACHE_KEY, payload);
+      else localStorage.removeItem(SPAWN_INTENT_CACHE_KEY);
+    } catch {}
   }
 
   function writeSnapshotCache() {
@@ -1520,7 +1645,13 @@
     }
   }
 
-  function attachSettledSpawnLinks(snapshot, previous, threadSpawns, settledCallIds) {
+  function attachSettledSpawnLinks(
+    snapshot,
+    previous,
+    threadSpawns,
+    threadIntents,
+    settledCallIds,
+  ) {
     const previousById = new Map(
       (previous?.nodes ?? []).map((node) => [node.nodeId, node]),
     );
@@ -1534,7 +1665,7 @@
       snapshot.nodes.filter((node) => node.spawnLink).map((node) => node.nodeId),
     );
     for (const callId of settledCallIds) {
-      const progress = threadSpawns?.get(callId);
+      const progress = threadSpawns?.get(callId) ?? threadIntents?.get(callId);
       if (!progress?.tasks?.length) continue;
       const candidates = snapshot.nodes.filter((node) =>
         node.kind !== "root_epoch" &&
@@ -1586,11 +1717,13 @@
     const normalized = normalizeSnapshot(snapshot);
     if (!normalized) return false;
     const threadSpawns = state.spawns.get(threadId);
+    const threadIntents = state.spawnIntents.get(threadId);
     const settledCallIds = snapshot.settledSpawnCallIds ?? [];
     const transferredRows = attachSettledSpawnLinks(
       normalized,
       previous,
       threadSpawns,
+      threadIntents,
       settledCallIds,
     );
     const selectedRow = state.selectedRows.get(threadId);
@@ -1738,6 +1871,110 @@
     return true;
   }
 
+  function rememberSpawnIntent(intent, hostId = null) {
+    const threadId = normalizeThreadId(intent?.threadId);
+    const callId = typeof intent?.callId === "string" ? intent.callId.trim() : "";
+    if (!threadId || !callId || !Array.isArray(intent?.tasks)) return false;
+    let threadIntents = state.spawnIntents.get(threadId);
+    if (!threadIntents) {
+      threadIntents = new Map();
+      state.spawnIntents.set(threadId, threadIntents);
+    }
+    const previous = threadIntents.get(callId);
+    const previousTasks = new Map(
+      (previous?.tasks ?? []).map((task) => [Number(task.ordinal), task]),
+    );
+    const tasks = intent.tasks
+      .slice(0, MAX_SPAWN_INTENT_TASKS)
+      .map((task, ordinal) => {
+        const normalizedOrdinal = Number.isInteger(Number(task?.ordinal))
+          ? Number(task.ordinal)
+          : ordinal;
+        const prior = previousTasks.get(normalizedOrdinal);
+        return normalizeSpawnTarget({
+          ...prior,
+          ...task,
+          callId,
+          ordinal: normalizedOrdinal,
+          summary: task?.summary || prior?.summary,
+          threadId: task?.threadId || prior?.threadId,
+          agentPath: task?.agentPath || prior?.agentPath,
+          observedAtMs: task?.observedAtMs || prior?.observedAtMs,
+          startedAtMs: task?.startedAtMs || prior?.startedAtMs,
+          completedAtMs: task?.completedAtMs || prior?.completedAtMs,
+        });
+      })
+      .filter(Boolean);
+    if (!tasks.length) return false;
+    const normalized = normalizeSpawnIntent({
+      ...previous,
+      ...intent,
+      threadId,
+      callId,
+      hostId: hostId || intent.hostId || previous?.hostId,
+      tasks,
+    });
+    if (!normalized) return false;
+    const unchanged = previous && JSON.stringify({
+      ...previous,
+      cachedAt: 0,
+    }) === JSON.stringify({
+      ...normalized,
+      cachedAt: 0,
+    });
+    if (!unchanged) {
+      threadIntents.delete(callId);
+      threadIntents.set(callId, normalized);
+      state.spawnIntents.delete(threadId);
+      state.spawnIntents.set(threadId, threadIntents);
+      while (threadIntents.size > MAX_SPAWN_INTENTS_PER_THREAD) {
+        threadIntents.delete(threadIntents.keys().next().value);
+      }
+      while (state.spawnIntents.size > MAX_SPAWN_INTENT_THREADS) {
+        state.spawnIntents.delete(state.spawnIntents.keys().next().value);
+      }
+      // Deliberately synchronous: an interrupted parent turn must not lose the
+      // call identity and task summaries before live Spawn progress arrives.
+      writeSpawnIntentCache();
+    }
+    const targetHostId = normalized.hostId || hostId;
+    for (const task of normalized.tasks) nameSpawnThread(targetHostId, task);
+    if (threadId === state.activeThreadId) scheduleNativeSubagentLabelSync(4);
+    return !unchanged;
+  }
+
+  function rememberSpawnCallNotification(params, hostId = null) {
+    const item = params?.item;
+    if (!item || !["function_call", "custom_tool_call"].includes(item.type)) {
+      return false;
+    }
+    if (item.namespace !== "spine" || item.name !== "spawn") return false;
+    const callId = typeof item.call_id === "string"
+      ? item.call_id
+      : typeof item.callId === "string"
+        ? item.callId
+        : "";
+    let args = item.arguments ?? item.input;
+    if (typeof args === "string") {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        return false;
+      }
+    }
+    if (!callId || !Array.isArray(args?.tasks)) return false;
+    return rememberSpawnIntent({
+      threadId: params.threadId,
+      turnId: params.turnId,
+      callId,
+      hostId,
+      tasks: args.tasks.map((task, ordinal) => ({
+        ordinal,
+        summary: task?.summary,
+      })),
+    }, hostId);
+  }
+
   function rememberSpawn(progress, hostId = null) {
     if (
       !progress ||
@@ -1765,6 +2002,13 @@
         mergeSpawnTask(task, previousTasks.get(Number(task.ordinal)), now)),
     };
     threadSpawns.set(progress.callId, normalized);
+    rememberSpawnIntent({
+      threadId,
+      turnId: progress.turnId,
+      callId: progress.callId,
+      hostId,
+      tasks: normalized.tasks,
+    }, hostId);
     for (const task of normalized.tasks) nameSpawnThread(hostId, task);
     if (threadId === state.activeThreadId) scheduleNativeSubagentLabelSync(4);
     return true;
@@ -2527,19 +2771,35 @@
   }
 
   function knownSpawnTargets() {
-    const targets = [];
-    const seen = new Set();
+    const targets = new Map();
     const append = (target) => {
-      const link = normalizeSpawnLink(target);
+      const link = normalizeSpawnTarget(target);
       if (!link) return;
       const key = `${link.callId}:${link.ordinal}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      targets.push(link);
+      const previous = targets.get(key);
+      targets.set(key, previous ? {
+        ...previous,
+        ...link,
+        threadId: link.threadId || previous.threadId,
+        agentPath: link.agentPath || previous.agentPath,
+        summary: link.summary || previous.summary,
+        observedAtMs: link.observedAtMs || previous.observedAtMs,
+        startedAtMs: link.startedAtMs || previous.startedAtMs,
+        completedAtMs: link.completedAtMs || previous.completedAtMs,
+      } : link);
     };
-    for (const node of currentSnapshot()?.nodes ?? []) append(node.spawnLink);
+    const activeThreadId = normalizeThreadId(state.activeThreadId);
+    for (const intent of state.spawnIntents.get(activeThreadId)?.values() ?? []) {
+      for (const task of intent.tasks ?? []) append(task);
+    }
+    for (const node of currentSnapshot()?.nodes ?? []) {
+      if (node.spawnLink) append({
+        ...node.spawnLink,
+        summary: node.spawnLink.summary || node.summary,
+      });
+    }
     for (const progress of state.spawns
-      .get(normalizeThreadId(state.activeThreadId))?.values() ?? []) {
+      .get(activeThreadId)?.values() ?? []) {
       for (const task of progress.tasks ?? []) {
         append({
           callId: progress.callId,
@@ -2550,7 +2810,7 @@
         });
       }
     }
-    return targets;
+    return [...targets.values()];
   }
 
   function syncNativeSubagentLabel(target) {
@@ -5137,6 +5397,11 @@
               message.params,
               message.hostId ?? message.host_id ?? activeThreadHostId(),
             )
+          : message.method === RAW_RESPONSE_ITEM_METHOD
+            ? rememberSpawnCallNotification(
+                message.params,
+                message.hostId ?? message.host_id ?? activeThreadHostId(),
+              )
           : false;
     const threadId = normalizeThreadId(message.params?.threadId);
     if (changed && document.body && !state.ui?.host.isConnected) scheduleMount(24);
@@ -5346,6 +5611,7 @@
     state.snapshotCacheDirty = false;
     state.snapshots.clear();
     state.spawns.clear();
+    state.spawnIntents.clear();
     state.namedSpawnThreads.clear();
     state.namingSpawnThreads.clear();
     state.selectedRows.clear();
@@ -5362,6 +5628,7 @@
     closeWorkspaceDetail(false, true);
     try {
       localStorage.removeItem(SNAPSHOT_CACHE_KEY);
+      localStorage.removeItem(SPAWN_INTENT_CACHE_KEY);
       localStorage.removeItem(THREAD_ALIASES_KEY);
     } catch {}
     renderActiveNow();
@@ -5419,6 +5686,11 @@
       subagentTitleHookPending: Boolean(state.subagentTitleObserver),
     }),
     exportSnapshots: () => [...state.snapshots.values()],
+    exportSpawnIntents: () => [...state.spawnIntents.entries()].map(
+      ([threadId, intents]) => [threadId, [...intents.values()]],
+    ),
+    rememberSpawnIntent: (intent, hostId) => rememberSpawnIntent(intent, hostId),
+    knownSpawnTargets,
     getNodeDetail: (snapshot, nodeId) => nodeDetailModel(snapshot, nodeId),
     resolveDetailItem: (snapshot, rowKey) =>
       resolveWorkspaceDetailItem(snapshot, rowKey),
