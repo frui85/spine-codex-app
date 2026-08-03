@@ -67,6 +67,32 @@ assert.throws(
   /marker was not found/,
 );
 
+assert.equal(hook.isMainBundleFilename("main-dcXtv3U5.js"), true);
+assert.equal(hook.isMainBundleFilename("main--A7m_SpR.js"), true);
+assert.equal(hook.isMainBundleFilename("main.js"), false);
+assert.equal(hook.isMainBundleFilename("renderer-main-dcXtv3U5.js"), false);
+assert.equal(
+  hook.patchMainBundleCandidateSource(
+    "/app/.vite/build/main-dcXtv3U5.js",
+    "const unrelated = true;",
+  ),
+  null,
+);
+assert.equal(
+  hook.patchMainBundleCandidateSource(
+    "/app/.vite/build/renderer-dcXtv3U5.js",
+    remoteSelectorSource,
+  ),
+  null,
+);
+for (const filename of ["main-dcXtv3U5.js", "main--A7m_SpR.js"]) {
+  const candidate = hook.patchMainBundleCandidateSource(
+    `/app/.vite/build/${filename}`,
+    remoteSelectorSource,
+  );
+  assert.match(candidate, /process\.env\.SPINE_CODEX_REMOTE_CLI/);
+}
+
 assert.match(wrapperSource, /REMOTE_CLI_NAME = "spine-codex"/);
 assert.match(wrapperSource, /MIN_SPINE_CODEX_VERSION = "0\.2\.1"/);
 assert.match(wrapperSource, /CODEX_CLI_PATH=\$\{LOCAL_CLI_SHIM\}/);

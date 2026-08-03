@@ -5,14 +5,21 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const DEFAULT_MIN_SPINE_VERSION = "0.2.1";
-const MAIN_BUNDLE_PATTERN = /^main--[A-Za-z0-9_-]+\.js$/;
+// Vite has emitted both `main--HASH.js` and `main-HASH.js` across Codex App
+// releases. Treat every hashed main chunk as a candidate, then identify the
+// real SSH-owning entrypoint by source structure instead of its filename.
+const MAIN_BUNDLE_PATTERN = /^main-[A-Za-z0-9_-]+\.js$/;
 const SHARED_BUNDLE_REQUEST_PATTERN = /^\.\/src-[A-Za-z0-9_-]+\.js$/;
+const REMOTE_SELECTOR_MARKER = "process.env.CODEX_CLI_PATH";
 const REMOTE_SELECTOR_PATTERN =
   /function ([A-Za-z_$][\w$]*)\(\)\{let e=([A-Za-z_$][\w$]*)\(\);return e==null\|\|([A-Za-z_$][\w$]*)\(e\)\?null:e\}/;
 
+function isMainBundleFilename(filename) {
+  return MAIN_BUNDLE_PATTERN.test(path.basename(String(filename ?? "")));
+}
+
 function patchRemoteCliSelectorSource(source) {
-  const marker = "process.env.CODEX_CLI_PATH";
-  const markerIndex = source.indexOf(marker);
+  const markerIndex = source.indexOf(REMOTE_SELECTOR_MARKER);
   if (markerIndex < 0) {
     throw new Error("Codex SSH CLI selector marker was not found");
   }
@@ -36,6 +43,16 @@ function patchRemoteCliSelectorSource(source) {
     throw new Error("Codex SSH CLI selector was not patched");
   }
   return patched;
+}
+
+function patchMainBundleCandidateSource(filename, source) {
+  if (
+    !isMainBundleFilename(filename) ||
+    !String(source).includes(REMOTE_SELECTOR_MARKER)
+  ) {
+    return null;
+  }
+  return patchRemoteCliSelectorSource(String(source));
 }
 
 function parseVersion(value) {
@@ -104,6 +121,7 @@ function installMainProcessHook() {
   const originalExtension = Module._extensions[".js"];
   const originalLoad = Module._load;
   const proxyCache = new WeakMap();
+  let patchedMainFilename = null;
   let mainPatched = false;
   let versionWrapped = false;
 
@@ -111,21 +129,26 @@ function installMainProcessHook() {
     module,
     filename,
   ) {
-    if (!MAIN_BUNDLE_PATTERN.test(path.basename(filename))) {
+    if (!isMainBundleFilename(filename)) {
       return Reflect.apply(originalExtension, this, [module, filename]);
     }
-    Module._extensions[".js"] = originalExtension;
     const source = fs.readFileSync(filename, "utf8");
-    const patched = patchRemoteCliSelectorSource(source);
+    const patched = patchMainBundleCandidateSource(filename, source);
+    if (patched == null) {
+      // This is another Vite main chunk, not the SSH-owning entrypoint. Keep
+      // the hook installed until the structurally identified target loads.
+      return module._compile(source, filename);
+    }
+    Module._extensions[".js"] = originalExtension;
+    patchedMainFilename = path.resolve(filename);
     mainPatched = true;
     return module._compile(patched, filename);
   };
 
   Module._load = function spineCodexModuleLoad(request, parent, isMain) {
     const loaded = Reflect.apply(originalLoad, this, [request, parent, isMain]);
-    const parentName = path.basename(parent?.filename ?? "");
     if (
-      !MAIN_BUNDLE_PATTERN.test(parentName) ||
+      path.resolve(parent?.filename ?? "") !== patchedMainFilename ||
       !SHARED_BUNDLE_REQUEST_PATTERN.test(String(request)) ||
       !isCodexVersionModule(loaded)
     ) {
@@ -156,7 +179,9 @@ module.exports = {
   DEFAULT_MIN_SPINE_VERSION,
   parseVersion,
   versionAtLeast,
+  isMainBundleFilename,
   patchRemoteCliSelectorSource,
+  patchMainBundleCandidateSource,
   isCodexVersionModule,
   wrapCodexVersionModule,
   installMainProcessHook,

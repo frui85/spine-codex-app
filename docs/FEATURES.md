@@ -48,8 +48,11 @@ Electron-main preload extends that compatibility check to SpineCodex `0.2.1`
 or newer while preserving the App's original acceptance rules. The App still
 parses, stores, and displays the truthful `codex-cli 0.2.1` output; no fake
 upstream version is substituted. The preload is enabled only in Electron's
-browser process, intercepts only the hashed main bundle's version-check module,
-and leaves renderer and utility processes untouched. It does not patch
+browser process. It treats `main-HASH.js` and the older `main--HASH.js` as
+candidates, but patches only the bundle that contains the exact remote
+`CODEX_CLI_PATH` selector structure. Other main chunks are compiled unchanged,
+and the version-check module is wrapped only when required by that confirmed
+entrypoint. Renderer and utility processes remain untouched. It does not patch
 `app.asar` or alter the App signature.
 
 Locally, `CODEX_CLI_PATH` remains the absolute path to the wrapper's private

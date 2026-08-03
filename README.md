@@ -167,7 +167,7 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 
 Release versions track the minimum supported SpineCodex release. This release is **v0.2.1** and requires SpineCodex 0.2.1 or newer. Version tracking does not mean SpineCodex is redistributed here.
 
-The initial release was tested with ChatGPT/Codex Desktop build `26.727.40816`. Codex internals can change, so compatibility-sensitive hooks match narrow structural markers and fail closed instead of patching an unknown bundle.
+The wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816` and `26.727.51351`. Codex internals can change, so compatibility-sensitive hooks identify the SSH-owning main bundle by narrow source structures—not generated filenames—and fail closed instead of patching an unknown bundle.
 
 ```sh
 npm run check
