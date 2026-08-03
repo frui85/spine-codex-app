@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.2 — 2026-08-03
+
+Tracks SpineCodex v0.2.2 and raises the minimum supported SpineCodex version to 0.2.2.
+
 - Persists structured Spine Spawn task names before live progress, preserving native child-agent list and header names across interrupted parent turns and App restarts.
 - Identifies the Codex Electron SSH entrypoint by its internal CLI-selector structure instead of assuming the older `main--HASH.js` filename, restoring remote SpineCodex startup on newer App builds that emit `main-HASH.js`.
 

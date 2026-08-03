@@ -1,6 +1,6 @@
 # Feature details
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.2.1. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.2.2. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -36,7 +36,7 @@ app-server proxying, and cleanup. Nothing is written to `~/.ssh/config`, and no
 local absolute path is sent to the server: the remote login shell resolves its
 own `spine-codex` from `PATH`.
 
-Install SpineCodex `0.2.1` or newer on every remote host and make sure this
+Install SpineCodex `0.2.2` or newer on every remote host and make sure this
 works in a non-interactive login shell:
 
 ```sh
@@ -44,9 +44,9 @@ ssh <host> 'command -v spine-codex && spine-codex --version'
 ```
 
 Codex Desktop currently treats CLI `0.141.0` as its upstream minimum. A tiny
-Electron-main preload extends that compatibility check to SpineCodex `0.2.1`
+Electron-main preload extends that compatibility check to SpineCodex `0.2.2`
 or newer while preserving the App's original acceptance rules. The App still
-parses, stores, and displays the truthful `codex-cli 0.2.1` output; no fake
+parses, stores, and displays the truthful SpineCodex version output; no fake
 upstream version is substituted. The preload is enabled only in Electron's
 browser process. It treats `main-HASH.js` and the older `main--HASH.js` as
 candidates, but patches only the bundle that contains the exact remote

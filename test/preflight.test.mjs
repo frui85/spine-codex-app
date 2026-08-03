@@ -44,11 +44,11 @@ test("doctor reports invalid SpineCodex and App together without a stack", () =>
   assert.doesNotMatch(result.stdout + result.stderr, /node:internal|\n\s+at async /);
 });
 
-test("doctor rejects an old SpineCodex release with an upgrade command", async () => {
+test("doctor rejects SpineCodex 0.2.1 below the release compatibility line", async () => {
   const directory = await mkdtemp(join(tmpdir(), "spine-app-test-"));
   const binary = join(directory, "spine-codex");
   try {
-    await writeFile(binary, "#!/bin/sh\necho 'codex-cli 0.2.0'\n", "utf8");
+    await writeFile(binary, "#!/bin/sh\necho 'codex-cli 0.2.1'\n", "utf8");
     await chmod(binary, 0o755);
     const result = spawnSync(
       process.execPath,
@@ -56,7 +56,7 @@ test("doctor rejects an old SpineCodex release with an upgrade command", async (
       { encoding: "utf8" },
     );
     assert.equal(result.status, 1);
-    assert.match(result.stdout, /0\.2\.0 is older than required 0\.2\.1/);
+    assert.match(result.stdout, /0\.2\.1 is older than required 0\.2\.2/);
     assert.match(result.stdout, /npm install -g @spinejit\/spine-codex@latest/);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -69,5 +69,5 @@ test("version command does not require installed dependencies", () => {
     env: { ...process.env, PATH: "/usr/bin:/bin" },
   });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), "spine-app 0.2.1");
+  assert.equal(result.stdout.trim(), "spine-app 0.2.2");
 });

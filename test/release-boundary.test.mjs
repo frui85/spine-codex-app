@@ -8,11 +8,11 @@ const launcher = await readFile(new URL("spine-app.mjs", root), "utf8");
 const renderer = await readFile(new URL("spine-view.js", root), "utf8");
 const builder = await readFile(new URL("scripts/build-macos-release.mjs", root), "utf8");
 
-test("public release version tracks SpineCodex 0.2.1", () => {
-  assert.equal(metadata.version, "0.2.1");
-  assert.match(launcher, /APP_VERSION = "0\.2\.1"/);
-  assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.1"/);
-  assert.match(renderer, /VERSION = "0\.2\.1"/);
+test("public release version tracks SpineCodex 0.2.2", () => {
+  assert.equal(metadata.version, "0.2.2");
+  assert.match(launcher, /APP_VERSION = "0\.2\.2"/);
+  assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
+  assert.match(renderer, /VERSION = "0\.2\.2"/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {

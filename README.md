@@ -10,16 +10,16 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.1"><img alt="Release v0.2.1" src="https://img.shields.io/badge/release-v0.2.1-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2"><img alt="Release v0.2.2" src="https://img.shields.io/badge/release-v0.2.2-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
-  <img alt="SpineCodex 0.2.1+" src="https://img.shields.io/badge/SpineCodex-0.2.1%2B-17171B?style=flat-square">
+  <img alt="SpineCodex 0.2.2+" src="https://img.shields.io/badge/SpineCodex-0.2.2%2B-17171B?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.1/SpineCodex-App-v0.2.1-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.1/SpineCodex-App-v0.2.1-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -89,7 +89,7 @@ The full cache limits, rendering contracts, navigation behavior, and performance
 
 - macOS 14 or newer
 - The current [ChatGPT desktop app with Codex](https://chatgpt.com/download/)
-- SpineCodex 0.2.1 or newer:
+- SpineCodex 0.2.2 or newer:
 
 ```sh
 npm install -g @spinejit/spine-codex@latest
@@ -102,8 +102,8 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.1-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.1/SpineCodex-App-v0.2.1-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.1-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.1/SpineCodex-App-v0.2.1-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v0.2.2-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v0.2.2-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-x64.dmg) |
 
 The DMGs contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
@@ -165,7 +165,7 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-Release versions track the minimum supported SpineCodex release. This release is **v0.2.1** and requires SpineCodex 0.2.1 or newer. Version tracking does not mean SpineCodex is redistributed here.
+Release versions track the minimum supported SpineCodex release. This release is **v0.2.2** and requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
 
 The wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816` and `26.727.51351`. Codex internals can change, so compatibility-sensitive hooks identify the SSH-owning main bundle by narrow source structures—not generated filenames—and fail closed instead of patching an unknown bundle.
 

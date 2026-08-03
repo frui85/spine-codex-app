@@ -4,7 +4,7 @@ const Module = require("node:module");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const DEFAULT_MIN_SPINE_VERSION = "0.2.1";
+const DEFAULT_MIN_SPINE_VERSION = "0.2.2";
 // Vite has emitted both `main--HASH.js` and `main-HASH.js` across Codex App
 // releases. Treat every hashed main chunk as a candidate, then identify the
 // real SSH-owning entrypoint by source structure instead of its filename.

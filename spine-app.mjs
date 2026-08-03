@@ -8,12 +8,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.2.1";
+const APP_VERSION = "0.2.2";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(LOCAL_CLI_DIR, "spine-codex");
 const ELECTRON_MAIN_HOOK = join(HERE, "spine-electron-main-hook.cjs");
 const REMOTE_CLI_NAME = "spine-codex";
-const MIN_SPINE_CODEX_VERSION = "0.2.1";
+const MIN_SPINE_CODEX_VERSION = "0.2.2";
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
 const CODEX_DOWNLOAD_URL = "https://chatgpt.com/download/";

@@ -21,14 +21,14 @@ const hook = require(fileURLToPath(hookPath));
 const wrapperSource = await readFile(wrapperPath, "utf8");
 const shimSource = await readFile(shimPath, "utf8");
 
-assert.equal(hook.DEFAULT_MIN_SPINE_VERSION, "0.2.1");
-assert.deepEqual(hook.parseVersion("0.2.1"), [0, 2, 1]);
+assert.equal(hook.DEFAULT_MIN_SPINE_VERSION, "0.2.2");
+assert.deepEqual(hook.parseVersion("0.2.2"), [0, 2, 2]);
 assert.deepEqual(hook.parseVersion("v1.3.5+build.7"), [1, 3, 5]);
-assert.equal(hook.parseVersion("0.2.1-beta.1"), null);
-assert.equal(hook.versionAtLeast("0.2.1", "0.2.1"), true);
-assert.equal(hook.versionAtLeast("0.2.2", "0.2.1"), true);
-assert.equal(hook.versionAtLeast("1.0.0", "0.2.1"), true);
-assert.equal(hook.versionAtLeast("0.2.0", "0.2.1"), false);
+assert.equal(hook.parseVersion("0.2.2-beta.1"), null);
+assert.equal(hook.versionAtLeast("0.2.2", "0.2.2"), true);
+assert.equal(hook.versionAtLeast("0.2.3", "0.2.2"), true);
+assert.equal(hook.versionAtLeast("1.0.0", "0.2.2"), true);
+assert.equal(hook.versionAtLeast("0.2.1", "0.2.2"), false);
 
 const nativeModule = Object.freeze({
   wc: (version) => version === "0.0.0" || version === "0.141.0",
@@ -36,15 +36,15 @@ const nativeModule = Object.freeze({
   Sc: "minimum version: ",
   untouched: { value: 42 },
 });
-const wrapped = hook.wrapCodexVersionModule(nativeModule, "0.2.1");
+const wrapped = hook.wrapCodexVersionModule(nativeModule, "0.2.2");
 assert.notEqual(wrapped, nativeModule);
 assert.equal(wrapped.wc("0.0.0"), true);
 assert.equal(wrapped.wc("0.141.0"), true);
-assert.equal(wrapped.wc("0.2.1"), true);
+assert.equal(wrapped.wc("0.2.2"), true);
 assert.equal(wrapped.wc("0.3.0"), true);
-assert.equal(wrapped.wc("0.2.0"), false);
+assert.equal(wrapped.wc("0.2.1"), false);
 assert.equal(wrapped.untouched, nativeModule.untouched);
-assert.equal(nativeModule.wc("0.2.1"), false);
+assert.equal(nativeModule.wc("0.2.2"), false);
 const unrelatedModule = { wc() {} };
 assert.equal(hook.wrapCodexVersionModule(unrelatedModule), unrelatedModule);
 
@@ -94,7 +94,7 @@ for (const filename of ["main-dcXtv3U5.js", "main--A7m_SpR.js"]) {
 }
 
 assert.match(wrapperSource, /REMOTE_CLI_NAME = "spine-codex"/);
-assert.match(wrapperSource, /MIN_SPINE_CODEX_VERSION = "0\.2\.1"/);
+assert.match(wrapperSource, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
 assert.match(wrapperSource, /CODEX_CLI_PATH=\$\{LOCAL_CLI_SHIM\}/);
 assert.match(wrapperSource, /SPINE_CODEX_REMOTE_CLI=\$\{REMOTE_CLI_NAME\}/);
 assert.match(wrapperSource, /PATH=\$\{appSearchPath\}/);
@@ -110,5 +110,5 @@ assert.match(shimSource, /--disable image_generation/);
 assert.match(shimSource, /"\$@"/);
 
 console.log(
-  "Spine SSH command selection, local shim, and 0.2.1 main-process compatibility checks passed",
+  "Spine SSH command selection, local shim, and 0.2.2 main-process compatibility checks passed",
 );

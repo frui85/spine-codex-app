@@ -29,7 +29,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF_NAME:-v0.2.1}"
+          tag="${GITHUB_REF_NAME:-v0.2.2}"
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/*.dmg dist/*.sha256 --clobber
           else
