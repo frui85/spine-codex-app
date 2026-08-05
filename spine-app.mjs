@@ -2,20 +2,24 @@
 import { access, open as openFile, readFile, readdir } from "node:fs/promises";
 import { accessSync, constants } from "node:fs";
 import { createServer } from "node:net";
-import { homedir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { homedir, release as osRelease, tmpdir } from "node:os";
+import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const APP_VERSION = "0.2.2";
 const LOCAL_CLI_DIR = join(HERE, "bin");
-const LOCAL_CLI_SHIM = join(LOCAL_CLI_DIR, "spine-codex");
+const LOCAL_CLI_SHIM = join(
+  LOCAL_CLI_DIR,
+  process.platform === "win32" ? "spine-codex.exe" : "spine-codex",
+);
 const ELECTRON_MAIN_HOOK = join(HERE, "spine-electron-main-hook.cjs");
 const REMOTE_CLI_NAME = "spine-codex";
 const MIN_SPINE_CODEX_VERSION = "0.2.2";
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
+const MIN_WINDOWS_VERSION = "10.0.17763";
 const CODEX_DOWNLOAD_URL = "https://chatgpt.com/download/";
 const SPINE_CODEX_INSTALL_COMMAND = "npm install -g @spinejit/spine-codex@latest";
 const ELECTRON_FUSE_SENTINEL = Buffer.from(
@@ -34,7 +38,7 @@ hosts use their own spine-codex command instead of codex.
 
 Options:
   --spine-codex PATH  SpineCodex binary (default: resolve from PATH)
-  --app PATH          Codex/ChatGPT app bundle (default: auto-detect)
+  --app PATH          Codex executable or macOS app bundle (default: auto-detect)
   --diagnose          Check every prerequisite without launching the app
   -V, --version       Print the wrapper version
   -h, --help          Show this help`);
@@ -68,52 +72,44 @@ const {
   rendererSource: SCRIPT,
 } = diagnosis;
 
-if (isAppRunning()) {
+if (isAppRunning(appPath)) {
   fail("Codex Desktop is running. Quit it completely, then run spine-app again.");
 }
 
 const debugPort = await reservePort();
+const mainHookStatusPath = join(
+  tmpdir(),
+  `spine-codex-main-hook-${process.pid}-${debugPort}.json`,
+);
 const deepLink = args.workspace == null
   ? null
   : `codex://threads/new?path=${encodeURIComponent(resolve(process.cwd(), args.workspace))}`;
 const appSearchPath = [LOCAL_CLI_DIR, commandSearchPath]
   .filter(Boolean)
   .join(delimiter);
-const mainHookOption = `--require ${JSON.stringify(ELECTRON_MAIN_HOOK)}`;
+const mainHookOption = process.platform === "win32"
+  ? `--require "${ELECTRON_MAIN_HOOK.replaceAll('"', '\\"')}"`
+  : `--require ${JSON.stringify(ELECTRON_MAIN_HOOK)}`;
 const nodeOptions = [mainHookOption, process.env.NODE_OPTIONS].filter(Boolean).join(" ");
-const openArguments = [
-    "-n",
-    "--env",
-    `PATH=${appSearchPath}`,
-    "--env",
-    `CODEX_CLI_PATH=${LOCAL_CLI_SHIM}`,
-    "--env",
-    `SPINE_CODEX_REMOTE_CLI=${REMOTE_CLI_NAME}`,
-    "--env",
-    `SPINE_CODEX_BINARY=${spineCodex}`,
-    "--env",
-    `SPINE_CODEX_MIN_VERSION=${MIN_SPINE_CODEX_VERSION}`,
-    "--env",
-    `NODE_OPTIONS=${nodeOptions}`,
-    "-a",
-    appPath,
-  ];
-if (deepLink) openArguments.push(deepLink);
-openArguments.push(
-    "--args",
-    "--remote-debugging-address=127.0.0.1",
-    `--remote-debugging-port=${debugPort}`,
-  );
-const child = spawn(
-  "/usr/bin/open",
-  openArguments,
-  { stdio: "inherit" },
-);
-const status = await new Promise((resolve) => child.once("exit", resolve));
-if (status !== 0) fail(`open exited with status ${status}`);
+const appEnvironment = {
+  ...process.env,
+  PATH: appSearchPath,
+  // One portable command name is the invariant on both sides of SSH. Locally,
+  // PATH starts with LOCAL_CLI_DIR so this resolves to our private shim;
+  // remotely, Codex's login shell resolves the host's installed SpineCodex.
+  // A Codex App update can no longer make the remote selector fall back from
+  // an absolute local-only path to the official `codex` command.
+  CODEX_CLI_PATH: REMOTE_CLI_NAME,
+  SPINE_CODEX_BINARY: spineCodex,
+  SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
+  SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
+  NODE_OPTIONS: nodeOptions,
+};
+await launchCodexApp({ appPath, deepLink, debugPort, appEnvironment });
 
 process.stdout.write("Waiting for Codex renderer… ");
 const target = await waitForTarget(debugPort);
+await waitForMainHookReady(mainHookStatusPath);
 await inject(target.webSocketDebuggerUrl, debugPort, SCRIPT);
 console.log("Spine Tree ready.");
 
@@ -145,15 +141,35 @@ function requiredValue(values, index, option) {
 }
 
 function findExecutable(name, searchPath = process.env.PATH ?? "") {
+  const extensions = process.platform === "win32" && extname(name) === ""
+    ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
+        .split(";")
+        .filter(Boolean)
+    : [""];
   for (const directory of searchPath.split(delimiter)) {
     if (!directory) continue;
-    const candidate = join(directory, name);
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch {}
+    for (const extension of extensions) {
+      const candidate = join(directory, `${name}${extension}`);
+      try {
+        accessSync(
+          candidate,
+          process.platform === "win32" ? constants.F_OK : constants.X_OK,
+        );
+        return candidate;
+      } catch {}
+    }
   }
   return null;
+}
+
+function runExecutableSync(command, commandArgs, options) {
+  const commandScript =
+    process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command);
+  return spawnSync(command, commandArgs, {
+    ...options,
+    shell: commandScript,
+    windowsHide: true,
+  });
 }
 
 function parseCliVersion(output) {
@@ -190,12 +206,24 @@ async function diagnose(options) {
     } else {
       add("ok", "Platform", `macOS${macos ? ` ${macos}` : ""}`);
     }
+  } else if (process.platform === "win32") {
+    const windows = parseSystemVersion(osRelease());
+    if (windows && compareVersions(windows, MIN_WINDOWS_VERSION) < 0) {
+      add(
+        "error",
+        "Platform",
+        `Windows ${windows} is older than required ${MIN_WINDOWS_VERSION}`,
+        "Upgrade Windows before installing the current ChatGPT desktop app.",
+      );
+    } else {
+      add("ok", "Platform", `Windows${windows ? ` ${windows}` : ""}`);
+    }
   } else {
     add(
       "error",
       "Platform",
       `${process.platform} is unsupported`,
-      "This release currently supports macOS only.",
+      "This release supports macOS and Windows x64.",
     );
   }
 
@@ -214,7 +242,10 @@ async function diagnose(options) {
   let rendererSource = null;
   try {
     rendererSource = await readFile(join(HERE, "spine-view.js"), "utf8");
-    await access(LOCAL_CLI_SHIM, constants.X_OK);
+    await access(
+      LOCAL_CLI_SHIM,
+      process.platform === "win32" ? constants.F_OK : constants.X_OK,
+    );
     await access(ELECTRON_MAIN_HOOK, constants.R_OK);
     add("ok", "Wrapper files", `${Buffer.byteLength(rendererSource)} byte renderer`);
   } catch (error) {
@@ -242,8 +273,11 @@ async function diagnose(options) {
     );
   } else {
     try {
-      await access(requestedSpineCodex, constants.X_OK);
-      const version = spawnSync(requestedSpineCodex, ["--version"], {
+      await access(
+        requestedSpineCodex,
+        process.platform === "win32" ? constants.F_OK : constants.X_OK,
+      );
+      const version = runExecutableSync(requestedSpineCodex, ["--version"], {
         encoding: "utf8",
         env: { ...process.env, PATH: commandSearchPath },
       });
@@ -292,13 +326,20 @@ async function diagnose(options) {
     add(
       "error",
       "Codex Desktop",
-      "ChatGPT.app or Codex.app was not found",
+      "Codex Desktop was not found",
       `Download the current ChatGPT desktop app: ${CODEX_DOWNLOAD_URL}`,
     );
   } else {
     try {
-      await access(join(appPath, "Contents", "Info.plist"), constants.R_OK);
-      await access(join(appPath, "Contents", "Frameworks"), constants.R_OK);
+      if (process.platform === "darwin") {
+        await access(join(appPath, "Contents", "Info.plist"), constants.R_OK);
+        await access(join(appPath, "Contents", "Frameworks"), constants.R_OK);
+      } else {
+        await access(appPath, constants.R_OK);
+        if (extname(appPath).toLowerCase() !== ".exe") {
+          throw new Error("the Windows App path must point to an .exe file");
+        }
+      }
       nodeOptionsFuse = await readNodeOptionsFuse(appPath);
       if (nodeOptionsFuse !== "on") {
         add(
@@ -315,8 +356,8 @@ async function diagnose(options) {
       add(
         "error",
         "Codex Desktop",
-        `${appPath} is not a valid app bundle`,
-        `Pass --app /absolute/path/to/ChatGPT.app or download it from ${CODEX_DOWNLOAD_URL}`,
+        `${appPath} is not a valid Codex Desktop installation`,
+        `Pass --app with the Codex executable or app bundle, or download it from ${CODEX_DOWNLOAD_URL}`,
       );
     }
   }
@@ -337,11 +378,23 @@ async function diagnose(options) {
 }
 
 function resolveExecutableOption(value) {
-  if (value.includes("/") || value.startsWith(".")) return resolve(value);
+  if (isAbsolute(value) || value.includes("/") || value.includes("\\") || value.startsWith(".")) {
+    return resolve(value);
+  }
   return findExecutable(value);
 }
 
 function discoverLoginPath() {
+  if (process.platform === "win32") {
+    return mergeSearchPaths(
+      process.env.PATH,
+      process.env.APPDATA ? join(process.env.APPDATA, "npm") : "",
+      process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "npm") : "",
+      process.env.USERPROFILE ? join(process.env.USERPROFILE, ".volta", "bin") : "",
+      process.env.NVM_SYMLINK,
+      process.env.NVM_HOME,
+    );
+  }
   const loginShell = process.env.SHELL || "/bin/zsh";
   try {
     accessSync(loginShell, constants.X_OK);
@@ -373,26 +426,45 @@ async function findSpineCodex(commandSearchPath) {
   add(process.env.SPINE_CODEX_BINARY);
   add(findExecutable("spine-codex", commandSearchPath));
 
-  for (const candidate of [
-    "/opt/homebrew/bin/spine-codex",
-    "/usr/local/bin/spine-codex",
-    join(homedir(), ".local", "bin", "spine-codex"),
-    join(homedir(), ".npm-global", "bin", "spine-codex"),
-    join(homedir(), ".volta", "bin", "spine-codex"),
-  ]) add(candidate);
-
-  const nvmVersions = join(homedir(), ".nvm", "versions", "node");
-  try {
-    const versions = await readdir(nvmVersions);
-    versions.sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
-    for (const version of versions) {
-      add(join(nvmVersions, version, "bin", "spine-codex"));
+  if (process.platform === "win32") {
+    for (const directory of [
+      process.env.APPDATA ? join(process.env.APPDATA, "npm") : null,
+      process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "npm") : null,
+      process.env.USERPROFILE ? join(process.env.USERPROFILE, ".volta", "bin") : null,
+      process.env.NVM_SYMLINK,
+    ]) {
+      if (!directory) continue;
+      add(findExecutable("spine-codex", directory));
     }
-  } catch {}
+  }
+
+  if (process.platform !== "win32") {
+    for (const candidate of [
+      "/opt/homebrew/bin/spine-codex",
+      "/usr/local/bin/spine-codex",
+      join(homedir(), ".local", "bin", "spine-codex"),
+      join(homedir(), ".npm-global", "bin", "spine-codex"),
+      join(homedir(), ".volta", "bin", "spine-codex"),
+    ]) add(candidate);
+  }
+
+  if (process.platform !== "win32") {
+    const nvmVersions = join(homedir(), ".nvm", "versions", "node");
+    try {
+      const versions = await readdir(nvmVersions);
+      versions.sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+      for (const version of versions) {
+        add(join(nvmVersions, version, "bin", "spine-codex"));
+      }
+    } catch {}
+  }
 
   for (const candidate of candidates) {
     try {
-      await access(candidate, constants.X_OK);
+      await access(
+        candidate,
+        process.platform === "win32" ? constants.F_OK : constants.X_OK,
+      );
       return candidate;
     } catch {}
   }
@@ -417,6 +489,7 @@ function printDiagnosis(diagnosis, { stream = process.stdout } = {}) {
 }
 
 async function findApp() {
+  if (process.platform === "win32") return findWindowsApp();
   const candidates = [
     "/Applications/ChatGPT.app",
     "/Applications/Codex.app",
@@ -445,7 +518,132 @@ async function findApp() {
   return null;
 }
 
+async function findWindowsApp() {
+  const candidates = [];
+  const add = (candidate) => {
+    if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+  };
+  add(process.env.CODEX_APP_PATH);
+  if (process.env.LOCALAPPDATA) {
+    add(join(process.env.LOCALAPPDATA, "Programs", "ChatGPT", "ChatGPT.exe"));
+    add(join(process.env.LOCALAPPDATA, "Programs", "OpenAI", "ChatGPT.exe"));
+    add(join(process.env.LOCALAPPDATA, "Programs", "Codex", "Codex.exe"));
+  }
+  if (process.env.ProgramFiles) {
+    add(join(process.env.ProgramFiles, "ChatGPT", "ChatGPT.exe"));
+    add(join(process.env.ProgramFiles, "Codex", "Codex.exe"));
+  }
+
+  const appxScript = String.raw`
+$ErrorActionPreference = 'SilentlyContinue'
+$knownPackageNames = @(
+  'OpenAI.ChatGPT-Desktop',
+  'OpenAI.ChatGPT',
+  'OpenAI.Codex'
+)
+$knownPackageFamilies = @(
+  'OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0'
+)
+
+$packages = @()
+foreach ($name in $knownPackageNames) {
+  $packages += @(Get-AppxPackage -Name $name)
+}
+$packages += @(Get-AppxPackage | Where-Object {
+  $name = [string]$_.Name
+  $family = [string]$_.PackageFamilyName
+  ($knownPackageFamilies -contains $family) -or
+  $name -like 'OpenAI.ChatGPT*' -or
+  $name -like 'OpenAI.Codex*'
+})
+
+$seenPackages = @{}
+$results = @()
+foreach ($package in @($packages | Sort-Object Version -Descending)) {
+  $family = [string]$package.PackageFamilyName
+  if ([string]::IsNullOrWhiteSpace($family) -or $seenPackages.ContainsKey($family)) {
+    continue
+  }
+  $seenPackages[$family] = $true
+  $manifest = Get-AppxPackageManifest -Package ([string]$package.PackageFullName)
+  foreach ($application in @($manifest.Package.Applications.Application)) {
+    $relative = [Environment]::ExpandEnvironmentVariables(
+      ([string]$application.Executable).Trim('"')
+    )
+    if ([string]::IsNullOrWhiteSpace($relative)) { continue }
+    $executable = if ([IO.Path]::IsPathRooted($relative)) {
+      $relative
+    } else {
+      Join-Path ([string]$package.InstallLocation) $relative
+    }
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { continue }
+    $filename = [IO.Path]::GetFileName($executable)
+    $rank = if ($filename -ieq 'ChatGPT.exe' -or $filename -ieq 'Codex.exe') { 0 } else { 1 }
+    $results += [PSCustomObject]@{
+      Path = $executable
+      Rank = $rank
+      Version = [Version]$package.Version
+    }
+  }
+}
+
+$ordered = @($results | Sort-Object Rank, @{ Expression = 'Version'; Descending = $true })
+foreach ($result in $ordered) {
+  [Console]::Out.WriteLine([string]$result.Path)
+}
+if ($ordered.Count -eq 0) { exit 1 }
+`;
+  const discovered = spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", appxScript],
+    { encoding: "utf8", timeout: 10_000, windowsHide: true },
+  );
+  if (discovered.status === 0) {
+    for (const candidate of discovered.stdout.split(/\r?\n/)) {
+      add(candidate.trim());
+    }
+  }
+
+  const startAppScript = String.raw`
+$ErrorActionPreference = 'SilentlyContinue'
+foreach ($entry in @(Get-StartApps)) {
+  $appId = [string]$entry.AppID
+  if (Test-Path -LiteralPath $appId -PathType Leaf) {
+    $name = [IO.Path]::GetFileName($appId)
+    if ($name -ieq 'ChatGPT.exe' -or $name -ieq 'Codex.exe') {
+      [Console]::Out.WriteLine($appId)
+    }
+  }
+}
+`;
+  const startApps = spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", startAppScript],
+    { encoding: "utf8", timeout: 10_000, windowsHide: true },
+  );
+  if (startApps.status === 0) {
+    for (const candidate of startApps.stdout.split(/\r?\n/)) {
+      add(candidate.trim());
+    }
+  }
+
+  let firstReadable = null;
+  for (const candidate of candidates) {
+    try {
+      await access(candidate, constants.R_OK);
+      firstReadable ??= candidate;
+      if (await readNodeOptionsFuseFromBinary(candidate) === "on") {
+        return candidate;
+      }
+    } catch {}
+  }
+  return firstReadable;
+}
+
 async function readNodeOptionsFuse(applicationPath) {
+  if (process.platform === "win32") {
+    return readNodeOptionsFuseFromBinary(applicationPath);
+  }
   const frameworksPath = join(applicationPath, "Contents", "Frameworks");
   const entries = await readdir(frameworksPath, { withFileTypes: true });
   const frameworkBundle = entries.find(
@@ -460,7 +658,11 @@ async function readNodeOptionsFuse(applicationPath) {
     frameworkBundle,
     frameworkName,
   );
-  const handle = await openFile(framework, "r");
+  return readNodeOptionsFuseFromBinary(framework);
+}
+
+async function readNodeOptionsFuseFromBinary(binaryPath) {
+  const handle = await openFile(binaryPath, "r");
   const chunkSize = 1024 * 1024;
   const overlapSize = ELECTRON_FUSE_SENTINEL.length + 2 + 32;
   let overlap = Buffer.alloc(0);
@@ -500,12 +702,82 @@ async function readNodeOptionsFuse(applicationPath) {
   return "not-found";
 }
 
-function isAppRunning() {
+function isAppRunning(applicationPath) {
+  if (process.platform === "win32") {
+    const script = String.raw`
+$target = [IO.Path]::GetFullPath($args[0])
+$running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+  try { [IO.Path]::GetFullPath($_.Path) -ieq $target } catch { $false }
+} | Select-Object -First 1
+if ($null -eq $running) { exit 1 } else { exit 0 }
+`;
+    const check = spawnSync(
+      "powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+        applicationPath,
+      ],
+      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+    );
+    return check.status === 0;
+  }
   const check = spawnSync("/usr/bin/osascript", [
     "-e",
     'application id "com.openai.codex" is running',
   ], { encoding: "utf8" });
   return check.status === 0 && check.stdout.trim() === "true";
+}
+
+async function launchCodexApp({ appPath, deepLink, debugPort, appEnvironment }) {
+  const electronArguments = [
+    "--remote-debugging-address=127.0.0.1",
+    `--remote-debugging-port=${debugPort}`,
+  ];
+  if (process.platform === "darwin") {
+    const openArguments = [
+      "-n",
+      "--env",
+      `PATH=${appEnvironment.PATH}`,
+      "--env",
+      `CODEX_CLI_PATH=${appEnvironment.CODEX_CLI_PATH}`,
+      "--env",
+      `SPINE_CODEX_BINARY=${appEnvironment.SPINE_CODEX_BINARY}`,
+      "--env",
+      `SPINE_CODEX_MIN_VERSION=${appEnvironment.SPINE_CODEX_MIN_VERSION}`,
+      "--env",
+      `SPINE_CODEX_MAIN_HOOK_STATUS=${appEnvironment.SPINE_CODEX_MAIN_HOOK_STATUS}`,
+      "--env",
+      `NODE_OPTIONS=${appEnvironment.NODE_OPTIONS}`,
+      "-a",
+      appPath,
+    ];
+    if (deepLink) openArguments.push(deepLink);
+    openArguments.push("--args", ...electronArguments);
+    const child = spawn("/usr/bin/open", openArguments, { stdio: "inherit" });
+    const status = await new Promise((resolve) => child.once("exit", resolve));
+    if (status !== 0) fail(`open exited with status ${status}`);
+    return;
+  }
+
+  const appArguments = deepLink
+    ? [deepLink, ...electronArguments]
+    : electronArguments;
+  const child = spawn(appPath, appArguments, {
+    cwd: dirname(appPath),
+    detached: true,
+    env: appEnvironment,
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  await new Promise((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+  child.unref();
 }
 
 function reservePort() {
@@ -542,6 +814,29 @@ async function waitForTarget(port) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(`timed out waiting for Codex renderer: ${lastError?.message ?? "no target"}`);
+}
+
+async function waitForMainHookReady(statusPath) {
+  const deadline = Date.now() + 5_000;
+  let lastState = "not reported";
+  while (Date.now() < deadline) {
+    try {
+      const status = JSON.parse(await readFile(statusPath, "utf8"));
+      lastState = status.state ?? "invalid";
+      if (status.state === "ready") return status;
+      if (status.state === "incompatible") {
+        throw new Error(`incompatible Codex bundle: ${status.reason ?? "unknown structure"}`);
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !/Unexpected end of JSON input/.test(error?.message ?? "")) {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(
+    `SpineCodex SSH compatibility hook did not become ready (last state: ${lastState})`,
+  );
 }
 
 async function inject(webSocketUrl, port, source) {

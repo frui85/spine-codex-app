@@ -12,8 +12,8 @@ the App backend starts the existing SpineCodex binary with
 `--disable image_generation`. No provider, App installation, conversation
 database, or SpineCodex installation is modified.
 
-Requirements: macOS, Node.js 22 or newer, Codex Desktop, and `spine-codex` in
-`PATH`.
+Requirements: macOS 14+ or Windows 10 build 17763+, Node.js 22 or newer,
+Codex Desktop, and `spine-codex` in `PATH`.
 
 ```sh
 node spine-app.mjs --diagnose
@@ -27,6 +27,17 @@ section, and then exits. Conversation navigation or an in-App renderer reload
 therefore does not remove Spine View; a full App process restart still needs to
 be launched through the wrapper again.
 
+On Windows, the portable package resolves the stable
+`OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0` package family and its AppX manifest to
+the installed Electron executable without depending on the localized Start
+menu display name. A native GUI
+launcher starts that executable directly so the scoped `CODEX_CLI_PATH`,
+`NODE_OPTIONS`, and loopback CDP arguments reach the new process. A second
+native executable adapts Codex's backend launch to an externally installed npm
+`spine-codex.cmd`. Both executables are small repository-built shims; neither
+contains SpineCodex. The Windows package must stay together because its private
+Node runtime and wrapper files are resolved relative to the launcher.
+
 ## Remote SSH hosts
 
 For Codex App SSH connections, the wrapper makes the App probe and launch the
@@ -35,6 +46,14 @@ is used consistently for remote discovery, `--version`, app-server startup,
 app-server proxying, and cleanup. Nothing is written to `~/.ssh/config`, and no
 local absolute path is sent to the server: the remote login shell resolves its
 own `spine-codex` from `PATH`.
+
+`CODEX_CLI_PATH` itself is the portable command name `spine-codex`. Locally,
+the launcher prepends its private `bin` directory to `PATH`, so the command
+resolves deterministically to the wrapper shim and then to the discovered
+SpineCodex binary. Remotely, the same unmodified Codex selector sends that name
+through SSH. This remains safe if an App update changes the selector's bundled
+source because there is no absolute path for it to reject and no `codex`
+fallback to choose.
 
 Install SpineCodex `0.2.2` or newer on every remote host and make sure this
 works in a non-interactive login shell:
@@ -45,26 +64,45 @@ ssh <host> 'command -v spine-codex && spine-codex --version'
 
 Codex Desktop currently treats CLI `0.141.0` as its upstream minimum. A tiny
 Electron-main preload extends that compatibility check to SpineCodex `0.2.2`
-or newer while preserving the App's original acceptance rules. The App still
-parses, stores, and displays the truthful SpineCodex version output; no fake
-upstream version is substituted. The preload is enabled only in Electron's
-browser process. It treats `main-HASH.js` and the older `main--HASH.js` as
-candidates, but patches only the bundle that contains the exact remote
-`CODEX_CLI_PATH` selector structure. It then identifies the directly imported
-`src-*` version bundle by the stable unsupported-version error prefix and the
-minified comparator structure—not by generated export names such as `wc` or
-`mc`. Unrelated chunks are compiled unchanged, all loader hooks are removed as
-soon as both structures are patched, and unknown structures fail closed.
-Renderer and utility processes remain untouched. It does not patch `app.asar`
-or alter the App signature.
+or newer while preserving the App's original acceptance rules. It identifies
+the `src-*` version bundle by the stable unsupported-version error prefix and
+comparator structure—not by generated export names such as `wc` or `mc`.
 
-Locally, `CODEX_CLI_PATH` remains the absolute path to the wrapper's private
-shim, preserving Codex's local plugin/runtime path handling. The Electron-main
-preload changes only the remote SSH selector to
-`SPINE_CODEX_REMOTE_CLI=spine-codex`; remote login shells never see the local
-shim or its absolute path. Local launches still pass
-`--disable image_generation` to the existing binary selected by
-`--spine-codex`.
+The preload also identifies the SSH bootstrap by its fixed
+`desktop-ssh-websocket-v0.sock` marker and replaces only that bootstrap's
+lifecycle segment. Codex normally kills a stale server only when its executable
+name matches the newly selected CLI; that permits a prior official `codex`
+server to survive a switch to `spine-codex` and be silently reused.
+
+The replacement is an idempotent, per-user state machine. An atomic lock under
+the remote `app-server-control` directory serializes concurrent reconnects. A
+real Unix-socket connection probe plus `/proc` ancestry identifies a healthy
+SpineCodex server, which is reused without interruption. A stale socket or a
+healthy server whose process ancestry is not SpineCodex is replaced. `fuser`
+PIDs are checked against the current login UID before either TERM or KILL is
+sent, even when the SSH account has elevated privileges. The fallback combines
+`pgrep -U "$(id -u)"` with a line-anchored executable pattern, so shells merely
+containing the payload text cannot match. Ordinary Codex CLI sessions, explicit
+listen addresses, and other users' processes remain outside the target set.
+
+After launch, bootstrap keeps the process PID and requires two consecutive
+successful socket connections before returning success to Codex Desktop. A
+premature process exit or readiness timeout returns the remote app-server log
+instead of allowing the proxy to fail later with an opaque `socket hang up`.
+
+The preload runs only in Electron's browser main thread. Main and version
+chunks can load in either order, so both targets are recognized independently
+by content; worker, renderer, and utility processes remain untouched. Once
+both patches are verified, the loader hook is removed and a one-time status
+handshake lets the launcher continue. Unknown structures fail closed with an
+explicit startup error. No `app.asar` file or App signature is modified.
+
+SpineCodex's `--version` output is parsed honestly for the compatibility gate.
+The native connection card can still show an upstream core/app-server version
+such as `0.144.6`, because that value comes from the connected app-server's
+initialize handshake rather than from the CLI probe. It does not mean the
+remote executable was official Codex; the actual SSH command and process
+identity are the authoritative backend check.
 
 If a remote host does not contain `spine-codex`, the App's native missing-CLI
 screen still calls its official Codex installer. Do not use that installer for

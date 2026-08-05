@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+- Adds a Windows x64 portable build with native GUI and CLI-shim executables, an independently verified Node.js runtime, Codex Store-app discovery, and no bundled upstream binaries.
+- Finds the Windows Store ChatGPT/Codex executable from its stable AppX package identity and manifest instead of relying on the Start menu display name.
 - Identifies and patches the app-server version check by its stable error-prefix and comparator structure instead of minified export names, restoring SpineCodex SSH compatibility after Codex Desktop updates.
+- Keeps the Electron main hook installed across deferred and out-of-order App bundle loading, identifies both SSH targets independently by content, and requires a verified launcher-to-main-process readiness handshake before reporting startup success.
+- Uses the portable `spine-codex` command name for both local and remote `CODEX_CLI_PATH`, eliminating the App's absolute-path-to-`codex` fallback after bundle updates.
+- Makes remote app-server bootstrap idempotent: serializes concurrent reconnects, reuses a healthy SpineCodex server, replaces a stale or official-Codex socket owner only after same-UID verification, and waits for two successful Unix-socket probes before starting the proxy.
+- Restricts the Electron main preload to the browser main thread so worker processes cannot overwrite its verified readiness status.
 
 ## v0.2.2 — 2026-08-03
 

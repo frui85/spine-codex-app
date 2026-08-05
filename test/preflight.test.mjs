@@ -39,7 +39,7 @@ test("doctor reports invalid SpineCodex and App together without a stack", () =>
   );
   assert.equal(result.status, 1);
   assert.match(result.stdout, /SpineCodex: .*spine-app-missing-cli is not executable/);
-  assert.match(result.stdout, /is not a valid app bundle/);
+  assert.match(result.stdout, /is not a valid Codex Desktop installation/);
   assert.match(result.stdout, /chatgpt\.com\/download/);
   assert.doesNotMatch(result.stdout + result.stderr, /node:internal|\n\s+at async /);
 });

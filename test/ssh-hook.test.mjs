@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
@@ -97,6 +100,7 @@ assert.throws(
   /marker was not found/,
 );
 assert.doesNotMatch(hookSource, /value\.wc|value\.Cc|value\.Sc/);
+assert.match(hookSource, /isMainThread/);
 
 const remoteSelectorSource =
   "function Pae(){let e=process.env.CODEX_CLI_PATH;if(e==null)return null;" +
@@ -104,17 +108,55 @@ const remoteSelectorSource =
   "function Fae(e){return/[\\\\/]/.test(e)||/^[a-zA-Z]:/.test(e)}" +
   "function Iae(){let e=Pae();return e==null||Fae(e)?null:e}" +
   "function $S(){return Iae()??Aae}";
-const patchedRemoteSelector = hook.patchRemoteCliSelectorSource(
-  remoteSelectorSource,
+const remoteBootstrapSource =
+  "function quote(e){return e}" +
+  "let logPath=\"/tmp/app-server.log\";" +
+  "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
+  "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
+  "` || true) && nohup `,`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
+const patchedRemoteBootstrap = hook.patchRemoteBootstrapCleanupSource(
+  remoteBootstrapSource,
 );
 assert.match(
-  patchedRemoteSelector,
-  /process\.env\.SPINE_CODEX_REMOTE_CLI\?\.trim\(\)\|\|Pae\(\)/,
+  patchedRemoteBootstrap,
+  /fuser "\$control_socket"/,
 );
-assert.match(patchedRemoteSelector, /return e==null\|\|Fae\(e\)\?null:e/);
+assert.match(patchedRemoteBootstrap, /ps -o uid= -p "\$holder"/);
+assert.match(patchedRemoteBootstrap, /"\$owner" != "\$current_uid"/);
+assert.match(
+  patchedRemoteBootstrap,
+  /nohup sh -c 'exec "\$@" <\/dev\/null' sh/,
+);
+const renderedRemoteBootstrap = new Function(
+  "cli",
+  `${patchedRemoteBootstrap}; return command;`,
+)("spine-codex");
+assert.match(
+  renderedRemoteBootstrap,
+  /nohup sh -c 'exec "\$@" <\/dev\/null' sh spine-codex >\/tmp\/app-server\.log 2>&1 &/,
+);
+assert.doesNotMatch(renderedRemoteBootstrap, /&& nohup/);
+assert.equal(
+  spawnSync("/bin/sh", ["-n", "-c", renderedRemoteBootstrap]).status,
+  0,
+);
+assert.match(patchedRemoteBootstrap, /app_server_pid=\$!/);
+assert.match(patchedRemoteBootstrap, /net\.createConnection\(process\.argv\[1\]\)/);
+assert.match(patchedRemoteBootstrap, /python3 -c 'import socket,sys/);
+assert.match(patchedRemoteBootstrap, /attempt=0; while \[ "\$attempt" -lt 120 \]/);
+assert.match(patchedRemoteBootstrap, /spine-codex-bootstrap\.lock/);
+assert.match(patchedRemoteBootstrap, /if is_spine_server; then exit 0; fi/);
+assert.match(patchedRemoteBootstrap, /ready_count=.*ready_count \+ 1/);
+assert.match(patchedRemoteBootstrap, /Refusing to stop an app-server owned by another user/);
+assert.match(
+  patchedRemoteBootstrap,
+  /\^\(node \/\[\^ \]\*\(spine-codex\|codex\)/,
+);
+assert.doesNotMatch(patchedRemoteBootstrap, /\[a\]pp-server --listen/);
+assert.doesNotMatch(patchedRemoteBootstrap, /pkill -9 -U/);
 assert.throws(
-  () => hook.patchRemoteCliSelectorSource("const unrelated = true;"),
-  /marker was not found/,
+  () => hook.patchRemoteBootstrapCleanupSource("const unrelated = true;"),
+  /unsupported structure/,
 );
 
 assert.equal(hook.isMainBundleFilename("main-dcXtv3U5.js"), true);
@@ -141,26 +183,83 @@ assert.equal(
 for (const filename of ["main-dcXtv3U5.js", "main--A7m_SpR.js"]) {
   const candidate = hook.patchMainBundleCandidateSource(
     `/app/.vite/build/${filename}`,
-    remoteSelectorSource,
+    remoteSelectorSource + remoteBootstrapSource,
   );
-  assert.match(candidate, /process\.env\.SPINE_CODEX_REMOTE_CLI/);
+  assert.match(candidate, /app-server-control\.sock/);
 }
 
 assert.match(wrapperSource, /REMOTE_CLI_NAME = "spine-codex"/);
 assert.match(wrapperSource, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-assert.match(wrapperSource, /CODEX_CLI_PATH=\$\{LOCAL_CLI_SHIM\}/);
-assert.match(wrapperSource, /SPINE_CODEX_REMOTE_CLI=\$\{REMOTE_CLI_NAME\}/);
-assert.match(wrapperSource, /PATH=\$\{appSearchPath\}/);
-assert.match(wrapperSource, /NODE_OPTIONS=\$\{nodeOptions\}/);
+assert.match(wrapperSource, /CODEX_CLI_PATH: REMOTE_CLI_NAME/);
+assert.match(wrapperSource, /PATH: appSearchPath/);
+assert.match(wrapperSource, /NODE_OPTIONS: nodeOptions/);
 assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
+assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
+assert.match(wrapperSource, /waitForMainHookReady\(mainHookStatusPath\)/);
 assert.match(wrapperSource, /--require \$\{JSON\.stringify\(ELECTRON_MAIN_HOOK\)\}/);
+assert.match(wrapperSource, /--require "\$\{ELECTRON_MAIN_HOOK/);
 assert.match(wrapperSource, /readNodeOptionsFuse/);
 assert.match(wrapperSource, /NODE_OPTIONS_FUSE_INDEX = 2/);
-assert.doesNotMatch(wrapperSource, /CODEX_CLI_PATH=\$\{REMOTE_CLI_NAME\}/);
 
 assert.match(shimSource, /SPINE_CODEX_BINARY/);
 assert.match(shimSource, /--disable image_generation/);
 assert.match(shimSource, /"\$@"/);
+
+const fixtureDirectory = await mkdtemp(join(tmpdir(), "spine-main-hook-test-"));
+const fixtureMain = join(fixtureDirectory, "main-deferred.js");
+const fixtureBridge = join(fixtureDirectory, "chunk-bridge.js");
+const fixtureVersion = join(fixtureDirectory, "src-version.js");
+const fixtureStatus = join(fixtureDirectory, "status.json");
+const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+const previousMinimum = process.env.SPINE_CODEX_MIN_VERSION;
+try {
+  await writeFile(
+    fixtureVersion,
+    "let official=`0.141.0`,prefix=`codex-app-server-version-unsupported:`,zero=`0.0.0`;" +
+      "function compare(e,t){let a=e.split(`.`).map(Number),b=t.split(`.`).map(Number);" +
+      "for(let i=0;i<3;i+=1){if(a[i]!==b[i])return a[i]-b[i]}return 0}" +
+      "function check(e){return e===zero||compare(e,official)>=0}" +
+      "module.exports={check};",
+    "utf8",
+  );
+  await writeFile(
+    fixtureBridge,
+    "module.exports=require(`./src-version.js`);",
+    "utf8",
+  );
+  await writeFile(
+    fixtureMain,
+    "let fallback=`codex`;" + remoteSelectorSource.replace("Aae", "fallback") +
+      remoteBootstrapSource +
+      "let version=require(`./chunk-bridge.js`);" +
+      "module.exports={cli:$S(),check:version.check};",
+    "utf8",
+  );
+  process.env.CODEX_CLI_PATH = "spine-codex";
+  process.env.SPINE_CODEX_MIN_VERSION = "0.2.2";
+  assert.equal(hook.installMainProcessHook({
+    force: true,
+    statusPath: fixtureStatus,
+    deadlineMs: 2_000,
+  }), true);
+  const earlyVersion = require(fixtureBridge);
+  assert.equal(earlyVersion.check("0.2.2"), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  const deferredMain = require(fixtureMain);
+  assert.equal(deferredMain.cli, "spine-codex");
+  assert.equal(deferredMain.check("0.2.2"), true);
+  assert.equal(deferredMain.check("0.2.1"), false);
+  const hookStatus = JSON.parse(await readFile(fixtureStatus, "utf8"));
+  assert.equal(hookStatus.state, "ready");
+  assert.equal(hookStatus.mainFile, "main-deferred.js");
+  assert.equal(hookStatus.versionFile, "src-version.js");
+} finally {
+  if (previousCodexCliPath == null) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  if (previousMinimum == null) delete process.env.SPINE_CODEX_MIN_VERSION;
+  else process.env.SPINE_CODEX_MIN_VERSION = previousMinimum;
+  await rm(fixtureDirectory, { recursive: true, force: true });
+}
 
 console.log(
   "Spine SSH command selection, local shim, and 0.2.2 main-process compatibility checks passed",

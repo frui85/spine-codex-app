@@ -12,6 +12,7 @@
 <p align="center">
   <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2"><img alt="Release v0.2.2" src="https://img.shields.io/badge/release-v0.2.2-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
   <img alt="SpineCodex 0.2.2+" src="https://img.shields.io/badge/SpineCodex-0.2.2%2B-17171B?style=flat-square">
 </p>
@@ -87,7 +88,7 @@ The full cache limits, rendering contracts, navigation behavior, and performance
 
 ### 1. Install the two upstream requirements
 
-- macOS 14 or newer
+- macOS 14 or newer, or Windows 10 build 17763 or newer
 - The current [ChatGPT desktop app with Codex](https://chatgpt.com/download/)
 - SpineCodex 0.2.2 or newer:
 
@@ -96,7 +97,7 @@ npm install -g @spinejit/spine-codex@latest
 spine-codex --version
 ```
 
-### 2. Install SpineCodex App
+### 2. Install SpineCodex App on macOS
 
 Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit ChatGPT completely with **Command-Q**, then open SpineCodex App.
 
@@ -105,9 +106,19 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 | Apple Silicon | [SpineCodex-App-v0.2.2-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-arm64.dmg) |
 | Intel | [SpineCodex-App-v0.2.2-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-x64.dmg) |
 
-The DMGs contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
+The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
 > The initial public build is ad-hoc signed because the project does not yet have a Developer ID certificate. If macOS blocks the first launch, right-click the app and choose **Open**, or allow it once in **System Settings → Privacy & Security**. SHA-256 files are published beside both DMGs.
+
+### Windows x64 portable build
+
+The Windows build is currently produced as a portable ZIP. Extract the complete folder and run **SpineCodex App.exe**; do not move the executable away from its adjacent `runtime` and `wrapper` directories.
+
+```sh
+npm run build:windows
+```
+
+The build uses the official checksum-pinned Windows Node.js runtime and two tiny native x64 launchers compiled from this repository. It does not download or package Codex Desktop or SpineCodex. Windows code signing and real-device startup validation are still required before publishing it as a supported GitHub Release asset.
 
 <details>
 <summary><strong>Automatic path discovery</strong></summary>
@@ -116,8 +127,8 @@ No path setup is required in the normal case.
 
 | Target | Discovery order |
 |---|---|
-| Codex Desktop | Standard `/Applications` and `~/Applications` locations, then Spotlight/Launch Services using `com.openai.codex` |
-| Local SpineCodex | Explicit override, environment, current/login-shell `PATH`, Homebrew, npm, Volta, and installed nvm versions |
+| Codex Desktop | macOS standard locations plus Spotlight/Launch Services; Windows standard install locations plus the stable OpenAI AppX package identity and manifest executable path |
+| Local SpineCodex | Explicit override, environment, current/login-shell `PATH`, Homebrew/npm/Volta/nvm locations, and Windows npm command shims |
 | Remote SpineCodex | Each SSH host's login-shell `PATH`; the local executable path is never sent to the server |
 
 Explicit `--app` and `--spine-codex` options remain available for development and troubleshooting:
@@ -141,7 +152,7 @@ SpineCodex App
        └─ turn/spineSpawnProgress/updated
 ```
 
-The launcher does not modify `app.asar`, replace the Codex React tree, or patch the application on disk. Renderer integration uses a Shadow DOM surface and narrow structural hooks; version-sensitive main-process hooks fail closed when an unknown Codex bundle no longer matches.
+The launcher does not modify `app.asar`, replace the Codex React tree, or patch the application on disk. Renderer integration uses a Shadow DOM surface and narrow structural hooks. Both local and remote startup use the portable command name `spine-codex`: the local `PATH` resolves the wrapper's private shim, while each SSH login shell resolves its own installation. Remote bootstrap is serialized and idempotent: it reuses a healthy SpineCodex server, replaces only a same-user stale or official-Codex socket owner, and does not start the proxy until the Unix socket is demonstrably ready. A one-time launcher/main-process readiness handshake verifies the version and bootstrap structures before startup is reported as successful; unknown bundles fail closed.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled runtime notices.
 
@@ -167,14 +178,15 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 
 Release versions track the minimum supported SpineCodex release. This release is **v0.2.2** and requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
 
-The wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, and `26.730.61309`. Codex internals can change, so compatibility-sensitive hooks identify both the SSH-owning main bundle and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
+The macOS wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, `26.730.61309`, and `26.730.61639`. The Windows x64 package is cross-built and structurally verified on macOS but is not yet claimed as real-device validated. Codex internals can change, so compatibility-sensitive hooks identify both the SSH bootstrap and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
 
 ```sh
 npm run check
 npm run build:macos
+npm run build:windows
 ```
 
-The macOS build downloads pinned official Node.js arm64/x64 runtimes, verifies them against Node's SHA-256 manifest, and emits architecture-specific DMGs. It never downloads SpineCodex or Codex Desktop.
+The build scripts download pinned official Node.js runtimes, verify them against Node's SHA-256 manifest, and emit architecture-specific macOS DMGs or a Windows x64 portable ZIP. They never download SpineCodex or Codex Desktop.
 
 </details>
 
