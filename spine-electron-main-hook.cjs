@@ -9,13 +9,22 @@ const DEFAULT_MIN_SPINE_VERSION = "0.2.2";
 // releases. Treat every hashed main chunk as a candidate, then identify the
 // real SSH-owning entrypoint by source structure instead of its filename.
 const MAIN_BUNDLE_PATTERN = /^main-[A-Za-z0-9_-]+\.js$/;
-const SHARED_BUNDLE_REQUEST_PATTERN = /^\.\/src-[A-Za-z0-9_-]+\.js$/;
+const SHARED_BUNDLE_PATTERN = /^src-[A-Za-z0-9_-]+\.js$/;
 const REMOTE_SELECTOR_MARKER = "process.env.CODEX_CLI_PATH";
+const VERSION_ERROR_MARKER = "codex-app-server-version-unsupported:";
 const REMOTE_SELECTOR_PATTERN =
   /function ([A-Za-z_$][\w$]*)\(\)\{let e=([A-Za-z_$][\w$]*)\(\);return e==null\|\|([A-Za-z_$][\w$]*)\(e\)\?null:e\}/;
+const VERSION_CHECK_PATTERN =
+  /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2===([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\(\2,([A-Za-z_$][\w$]*)\)>=0\}/g;
+const STABLE_VERSION_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\+[0-9A-Za-z.-]+)?$/;
 
 function isMainBundleFilename(filename) {
   return MAIN_BUNDLE_PATTERN.test(path.basename(String(filename ?? "")));
+}
+
+function isSharedBundleFilename(filename) {
+  return SHARED_BUNDLE_PATTERN.test(path.basename(String(filename ?? "")));
 }
 
 function patchRemoteCliSelectorSource(source) {
@@ -55,6 +64,65 @@ function patchMainBundleCandidateSource(filename, source) {
   return patchRemoteCliSelectorSource(String(source));
 }
 
+function patchVersionCompatibilitySource(
+  source,
+  minimum = DEFAULT_MIN_SPINE_VERSION,
+) {
+  if (!parseVersion(minimum)) {
+    throw new Error("SpineCodex minimum version is invalid");
+  }
+  const markerIndex = source.indexOf(VERSION_ERROR_MARKER);
+  if (markerIndex < 0) {
+    throw new Error("Codex app-server version marker was not found");
+  }
+  const searchStart = Math.max(0, markerIndex - 1_000);
+  const searchEnd = Math.min(source.length, markerIndex + 6_000);
+  const searchWindow = source.slice(searchStart, searchEnd);
+  const matches = Array.from(searchWindow.matchAll(VERSION_CHECK_PATTERN));
+  if (matches.length !== 1) {
+    throw new Error("Codex app-server version check has an unsupported structure");
+  }
+  const [
+    original,
+    checkName,
+    argumentName,
+    zeroVersionName,
+    compareName,
+    officialMinimumName,
+  ] = matches[0];
+  const spineCompatible =
+    `/${STABLE_VERSION_PATTERN.source}/.test(${argumentName})&&` +
+    `${compareName}(${argumentName},${JSON.stringify(minimum)})>=0`;
+  const replacement =
+    `function ${checkName}(${argumentName}){return ` +
+    `${argumentName}===${zeroVersionName}||` +
+    `${compareName}(${argumentName},${officialMinimumName})>=0||` +
+    `${spineCompatible}}`;
+  const absoluteStart = searchStart + matches[0].index;
+  const patched =
+    source.slice(0, absoluteStart) +
+    replacement +
+    source.slice(absoluteStart + original.length);
+  if (patched === source) {
+    throw new Error("Codex app-server version check was not patched");
+  }
+  return patched;
+}
+
+function patchVersionBundleCandidateSource(
+  filename,
+  source,
+  minimum = DEFAULT_MIN_SPINE_VERSION,
+) {
+  if (
+    !isSharedBundleFilename(filename) ||
+    !String(source).includes(VERSION_ERROR_MARKER)
+  ) {
+    return null;
+  }
+  return patchVersionCompatibilitySource(String(source), minimum);
+}
+
 function parseVersion(value) {
   const match = String(value ?? "")
     .trim()
@@ -74,44 +142,6 @@ function versionAtLeast(value, minimum) {
   return true;
 }
 
-function isCodexVersionModule(value) {
-  return Boolean(
-    value &&
-      typeof value === "object" &&
-      typeof value.wc === "function" &&
-      typeof value.Cc === "function" &&
-      typeof value.Sc === "string",
-  );
-}
-
-function wrapCodexVersionModule(value, minimum = DEFAULT_MIN_SPINE_VERSION) {
-  if (!isCodexVersionModule(value)) return value;
-  const originalCheck = value.wc;
-  const compatible = (candidate) =>
-    Reflect.apply(originalCheck, value, [candidate]) ||
-    versionAtLeast(candidate, minimum);
-  const facade = Object.create(Object.getPrototypeOf(value));
-  return new Proxy(facade, {
-    get(_target, property, receiver) {
-      if (property === "wc") return compatible;
-      return Reflect.get(value, property, receiver);
-    },
-    has(_target, property) {
-      return Reflect.has(value, property);
-    },
-    ownKeys() {
-      return Reflect.ownKeys(value);
-    },
-    getOwnPropertyDescriptor(_target, property) {
-      const descriptor = Reflect.getOwnPropertyDescriptor(value, property);
-      return descriptor ? { ...descriptor, configurable: true } : undefined;
-    },
-    set(_target, property, nextValue, receiver) {
-      return Reflect.set(value, property, nextValue, receiver);
-    },
-  });
-}
-
 function installMainProcessHook() {
   if (!process.versions?.electron || process.type !== "browser") return false;
   const minimum =
@@ -119,54 +149,54 @@ function installMainProcessHook() {
   if (!parseVersion(minimum)) return false;
 
   const originalExtension = Module._extensions[".js"];
-  const originalLoad = Module._load;
-  const proxyCache = new WeakMap();
   let patchedMainFilename = null;
   let mainPatched = false;
-  let versionWrapped = false;
+  let versionPatched = false;
 
   Module._extensions[".js"] = function spineCodexMainExtension(
     module,
     filename,
   ) {
-    if (!isMainBundleFilename(filename)) {
-      return Reflect.apply(originalExtension, this, [module, filename]);
+    if (isMainBundleFilename(filename)) {
+      const source = fs.readFileSync(filename, "utf8");
+      const patched = patchMainBundleCandidateSource(filename, source);
+      if (patched == null) {
+        // This is another Vite main chunk, not the SSH-owning entrypoint. Keep
+        // the hook installed until the structurally identified target loads.
+        return module._compile(source, filename);
+      }
+      patchedMainFilename = path.resolve(filename);
+      mainPatched = true;
+      // Keep the extension hook for the target main bundle's direct src-* load.
+      return module._compile(patched, filename);
     }
-    const source = fs.readFileSync(filename, "utf8");
-    const patched = patchMainBundleCandidateSource(filename, source);
-    if (patched == null) {
-      // This is another Vite main chunk, not the SSH-owning entrypoint. Keep
-      // the hook installed until the structurally identified target loads.
+
+    if (
+      patchedMainFilename != null &&
+      path.resolve(module.parent?.filename ?? "") === patchedMainFilename &&
+      isSharedBundleFilename(filename)
+    ) {
+      const source = fs.readFileSync(filename, "utf8");
+      const patched = patchVersionBundleCandidateSource(
+        filename,
+        source,
+        minimum,
+      );
+      if (patched != null) {
+        Module._extensions[".js"] = originalExtension;
+        versionPatched = true;
+        return module._compile(patched, filename);
+      }
+      // The main bundle can import several src-* chunks. Compile unrelated
+      // chunks unchanged and wait for the structurally identified version one.
       return module._compile(source, filename);
     }
-    Module._extensions[".js"] = originalExtension;
-    patchedMainFilename = path.resolve(filename);
-    mainPatched = true;
-    return module._compile(patched, filename);
-  };
 
-  Module._load = function spineCodexModuleLoad(request, parent, isMain) {
-    const loaded = Reflect.apply(originalLoad, this, [request, parent, isMain]);
-    if (
-      path.resolve(parent?.filename ?? "") !== patchedMainFilename ||
-      !SHARED_BUNDLE_REQUEST_PATTERN.test(String(request)) ||
-      !isCodexVersionModule(loaded)
-    ) {
-      return loaded;
-    }
-    let proxy = proxyCache.get(loaded);
-    if (!proxy) {
-      proxy = wrapCodexVersionModule(loaded, minimum);
-      proxyCache.set(loaded, proxy);
-    }
-    versionWrapped = true;
-    // The main bundle now owns the wrapped checker in its local binding.
-    // Restore Node's loader immediately; there is no lifetime-wide require hook.
-    Module._load = originalLoad;
-    return proxy;
+    return Reflect.apply(originalExtension, this, [module, filename]);
   };
   process.nextTick(() => {
-    if (!mainPatched || !versionWrapped) {
+    if (!mainPatched || !versionPatched) {
+      Module._extensions[".js"] = originalExtension;
       throw new Error(
         "SpineCodex SSH hook is incompatible with this Codex App build",
       );
@@ -180,10 +210,11 @@ module.exports = {
   parseVersion,
   versionAtLeast,
   isMainBundleFilename,
+  isSharedBundleFilename,
   patchRemoteCliSelectorSource,
   patchMainBundleCandidateSource,
-  isCodexVersionModule,
-  wrapCodexVersionModule,
+  patchVersionCompatibilitySource,
+  patchVersionBundleCandidateSource,
   installMainProcessHook,
 };
 

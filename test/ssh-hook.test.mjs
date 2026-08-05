@@ -18,6 +18,7 @@ const shimPath = new URL(
 );
 
 const hook = require(fileURLToPath(hookPath));
+const hookSource = await readFile(hookPath, "utf8");
 const wrapperSource = await readFile(wrapperPath, "utf8");
 const shimSource = await readFile(shimPath, "utf8");
 
@@ -30,23 +31,72 @@ assert.equal(hook.versionAtLeast("0.2.3", "0.2.2"), true);
 assert.equal(hook.versionAtLeast("1.0.0", "0.2.2"), true);
 assert.equal(hook.versionAtLeast("0.2.1", "0.2.2"), false);
 
-const nativeModule = Object.freeze({
-  wc: (version) => version === "0.0.0" || version === "0.141.0",
-  Cc: (value) => value,
-  Sc: "minimum version: ",
-  untouched: { value: 42 },
-});
-const wrapped = hook.wrapCodexVersionModule(nativeModule, "0.2.2");
-assert.notEqual(wrapped, nativeModule);
-assert.equal(wrapped.wc("0.0.0"), true);
-assert.equal(wrapped.wc("0.141.0"), true);
-assert.equal(wrapped.wc("0.2.2"), true);
-assert.equal(wrapped.wc("0.3.0"), true);
-assert.equal(wrapped.wc("0.2.1"), false);
-assert.equal(wrapped.untouched, nativeModule.untouched);
-assert.equal(nativeModule.wc("0.2.2"), false);
-const unrelatedModule = { wc() {} };
-assert.equal(hook.wrapCodexVersionModule(unrelatedModule), unrelatedModule);
+function versionFixture({ check, argument, zero, compare, minimum, exportName }) {
+  return (
+    "var exports={};" +
+    `${minimum}=\`0.141.0\`,` +
+    "prefix=`codex-app-server-version-unsupported:`," +
+    `${zero}=\`0.0.0\`;` +
+    `function ${compare}(e,t){` +
+    "let a=e.split(/[.+-]/).slice(0,3).map(Number)," +
+    "b=t.split(/[.+-]/).slice(0,3).map(Number);" +
+    "for(let i=0;i<3;i+=1){if(a[i]!==b[i])return a[i]-b[i]}return 0}" +
+    `function ${check}(${argument}){return ` +
+    `${argument}===${zero}||${compare}(${argument},${minimum})>=0}` +
+    `Object.defineProperty(exports,\`${exportName}\`,` +
+    `{enumerable:!0,get:function(){return ${check}}})`
+  );
+}
+
+for (const fixture of [
+  {
+    check: "oldCheck",
+    argument: "e",
+    zero: "oldZero",
+    compare: "oldCompare",
+    minimum: "oldMinimum",
+    exportName: "wc",
+  },
+  {
+    check: "newCheck",
+    argument: "candidate",
+    zero: "newZero",
+    compare: "newCompare",
+    minimum: "newMinimum",
+    exportName: "mc",
+  },
+]) {
+  const source = versionFixture(fixture);
+  const patched = hook.patchVersionCompatibilitySource(source, "0.2.2");
+  const check = Function(`${patched};return ${fixture.check}`)();
+  assert.equal(check("0.0.0"), true);
+  assert.equal(check("0.141.0"), true);
+  assert.equal(check("0.2.2"), true);
+  assert.equal(check("0.2.2+build.7"), true);
+  assert.equal(check("0.3.0"), true);
+  assert.equal(check("0.2.3-beta.1"), false);
+  assert.equal(check("0.2.1"), false);
+  assert.equal(
+    hook.patchVersionBundleCandidateSource(
+      "/app/.vite/build/src-Bn_6ASpg.js",
+      source,
+      "0.2.2",
+    ),
+    patched,
+  );
+}
+assert.equal(
+  hook.patchVersionBundleCandidateSource(
+    "/app/.vite/build/src-runtime.js",
+    "const unrelated = true;",
+  ),
+  null,
+);
+assert.throws(
+  () => hook.patchVersionCompatibilitySource("const unrelated = true;"),
+  /marker was not found/,
+);
+assert.doesNotMatch(hookSource, /value\.wc|value\.Cc|value\.Sc/);
 
 const remoteSelectorSource =
   "function Pae(){let e=process.env.CODEX_CLI_PATH;if(e==null)return null;" +
@@ -71,6 +121,9 @@ assert.equal(hook.isMainBundleFilename("main-dcXtv3U5.js"), true);
 assert.equal(hook.isMainBundleFilename("main--A7m_SpR.js"), true);
 assert.equal(hook.isMainBundleFilename("main.js"), false);
 assert.equal(hook.isMainBundleFilename("renderer-main-dcXtv3U5.js"), false);
+assert.equal(hook.isSharedBundleFilename("src-Bn_6ASpg.js"), true);
+assert.equal(hook.isSharedBundleFilename("src-CLstCQVF.js"), true);
+assert.equal(hook.isSharedBundleFilename("renderer-src-Bn_6ASpg.js"), false);
 assert.equal(
   hook.patchMainBundleCandidateSource(
     "/app/.vite/build/main-dcXtv3U5.js",

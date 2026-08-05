@@ -50,10 +50,13 @@ parses, stores, and displays the truthful SpineCodex version output; no fake
 upstream version is substituted. The preload is enabled only in Electron's
 browser process. It treats `main-HASH.js` and the older `main--HASH.js` as
 candidates, but patches only the bundle that contains the exact remote
-`CODEX_CLI_PATH` selector structure. Other main chunks are compiled unchanged,
-and the version-check module is wrapped only when required by that confirmed
-entrypoint. Renderer and utility processes remain untouched. It does not patch
-`app.asar` or alter the App signature.
+`CODEX_CLI_PATH` selector structure. It then identifies the directly imported
+`src-*` version bundle by the stable unsupported-version error prefix and the
+minified comparator structure—not by generated export names such as `wc` or
+`mc`. Unrelated chunks are compiled unchanged, all loader hooks are removed as
+soon as both structures are patched, and unknown structures fail closed.
+Renderer and utility processes remain untouched. It does not patch `app.asar`
+or alter the App signature.
 
 Locally, `CODEX_CLI_PATH` remains the absolute path to the wrapper's private
 shim, preserving Codex's local plugin/runtime path handling. The Electron-main

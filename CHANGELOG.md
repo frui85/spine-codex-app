@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Identifies and patches the app-server version check by its stable error-prefix and comparator structure instead of minified export names, restoring SpineCodex SSH compatibility after Codex Desktop updates.
+
 ## v0.2.2 — 2026-08-03
 
 Tracks SpineCodex v0.2.2 and raises the minimum supported SpineCodex version to 0.2.2.
