@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { injectMainProcessHook } from "./lib/main-inspector.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.2.2";
+const APP_VERSION = "0.2.2.1";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,

@@ -16,7 +16,14 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadata = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
-const VERSION = metadata.version;
+const VERSION = valueAfter("--version") ?? metadata.spineAppVersion ?? metadata.version;
+const SOURCE_VERSION = metadata.spineAppVersion ?? metadata.version;
+if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(VERSION)) {
+  throw new Error(`invalid release version: ${VERSION}`);
+}
+if (VERSION !== SOURCE_VERSION) {
+  throw new Error(`release version ${VERSION} does not match source ${SOURCE_VERSION}`);
+}
 const NODE_VERSION = "v22.23.2";
 const ARCHITECTURE = valueAfter("--arch") ?? "x64";
 const CC = process.env.WINDOWS_CC || "x86_64-w64-mingw32-gcc";
@@ -194,12 +201,12 @@ function windowsManifest() {
 
 function windowsResource(iconPath, manifestPath) {
   const resourcePath = (value) => value.replaceAll("\\", "/").replaceAll('"', '\\"');
-  const [major, minor, patch] = VERSION.split(".").map(Number);
+  const [major, minor, patch, revision = 0] = VERSION.split(".").map(Number);
   return `1 ICON "${resourcePath(iconPath)}"
 1 24 "${resourcePath(manifestPath)}"
 1 VERSIONINFO
-FILEVERSION ${major},${minor},${patch},0
-PRODUCTVERSION ${major},${minor},${patch},0
+FILEVERSION ${major},${minor},${patch},${revision}
+PRODUCTVERSION ${major},${minor},${patch},${revision}
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN

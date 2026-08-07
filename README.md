@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2"><img alt="Release v0.2.2" src="https://img.shields.io/badge/release-v0.2.2-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.1"><img alt="Release v0.2.2.1" src="https://img.shields.io/badge/release-v0.2.2.1-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -18,9 +18,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.1/SpineCodex-App-v0.2.2.1-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.1/SpineCodex-App-v0.2.2.1-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -103,8 +103,8 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.2-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.2-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2/SpineCodex-App-v0.2.2-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v0.2.2.1-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.1/SpineCodex-App-v0.2.2.1-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v0.2.2.1-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.1/SpineCodex-App-v0.2.2.1-macos-x64.dmg) |
 
 The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
@@ -112,13 +112,13 @@ The release packages contain only this wrapper and its private Node.js runtime. 
 
 ### Windows x64 portable build
 
-The Windows build is currently produced as a portable ZIP. Extract the complete folder and run **SpineCodex App.exe**; do not move the executable away from its adjacent `runtime` and `wrapper` directories.
+The Windows build is currently produced locally as a portable ZIP. Extract the complete folder and run **SpineCodex App.exe**; do not move the executable away from its adjacent `runtime` and `wrapper` directories.
 
 ```sh
 npm run build:windows
 ```
 
-The build uses the official checksum-pinned Windows Node.js runtime and two tiny native x64 launchers compiled from this repository. It does not download or package Codex Desktop or SpineCodex. Windows code signing and real-device startup validation are still required before publishing it as a supported GitHub Release asset.
+The build uses the official checksum-pinned Windows Node.js runtime and two tiny native x64 launchers compiled from this repository. It does not download or package Codex Desktop or SpineCodex. A complete Windows Actions definition is kept as `.github/workflows/windows-release.yml.disabled`; GitHub does not execute it. Windows code signing and further real-device startup validation are required before enabling that workflow or publishing a supported Windows asset.
 
 Microsoft Store builds can ignore `NODE_OPTIONS` even when the packaged launcher does not expose a readable Electron fuse wire. On Windows, the wrapper therefore starts Electron paused on a fresh loopback-only Inspector port, loads the main-process hook in the paused CommonJS frame, resumes immediately, and closes the Inspector connection. Renderer injection proceeds only after the hook reports that both compatibility patches are ready. If Inspector injection or that handshake fails, the wrapper refuses to continue silently with an unpatched official-Codex backend.
 
@@ -185,7 +185,9 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-Release versions track the minimum supported SpineCodex release. This release is **v0.2.2** and requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
+The first three release components track the minimum supported SpineCodex release; a fourth component identifies wrapper-only revisions. This release is **v0.2.2.1** and still requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
+
+Pushing a matching `v*` tag starts the checked-in GitHub Actions release pipeline. The workflow validates the tag against `package.json#spineAppVersion`, runs the full checks, builds and verifies both macOS DMGs, uploads immutable workflow artifacts, and only then publishes the GitHub Release. Release creation begins as a draft so a failed upload cannot expose a partial release. Windows workflow code is present but intentionally disabled.
 
 The macOS wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, `26.730.61309`, and `26.730.61639`. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the new main-process Inspector path is awaiting another real-device run and is not yet claimed as a supported GitHub Release asset. Codex internals can change, so compatibility-sensitive hooks identify both the SSH bootstrap and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
 

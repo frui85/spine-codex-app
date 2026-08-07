@@ -29,8 +29,8 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "0.2.2";
-  const RENDERER_REVISION = 3;
+  const VERSION = "0.2.2.1";
+  const RENDERER_REVISION = 4;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -3201,13 +3201,13 @@
     if (ui.pane.isConnected) {
       ui.pane.removeAttribute("data-spine-detail-active");
     }
-    if (ui.tabList.isConnected) {
+    if (ui.tabList.isConnected && ui.tabTrack.isConnected) {
       const nativeCount = [...ui.tabList.children].filter((element) =>
         element !== ui.tabHost &&
         element.matches?.('[data-app-shell-tab-controller="right"]')).length;
-      ui.tabList.style.width =
+      ui.tabTrack.style.width =
         nativeCount === ui.originalNativeTabCount
-          ? ui.originalTabListWidth
+          ? ui.originalTabTrackWidth
           : workspaceTabListWidth(ui.tabStrip, nativeCount);
     }
     ui.tabHost.remove();
@@ -3226,13 +3226,31 @@
   }
 
   function syncWorkspaceTabList(ui) {
-    if (!ui?.tabList.isConnected || state.detailUi !== ui) return;
+    if (
+      !ui?.tabList.isConnected ||
+      !ui?.tabTrack.isConnected ||
+      state.detailUi !== ui
+    ) return;
     if (ui.tabHost.parentElement !== ui.tabList) ui.tabList.append(ui.tabHost);
     const nativeCount = [...ui.tabList.children].filter((element) =>
       element !== ui.tabHost &&
       element.matches?.('[data-app-shell-tab-controller="right"]')).length;
     const width = workspaceTabListWidth(ui.tabStrip, nativeCount + 1);
-    if (ui.tabList.style.width !== width) ui.tabList.style.width = width;
+    if (ui.tabTrack.style.width !== width) ui.tabTrack.style.width = width;
+  }
+
+  function workspaceTabListParts(tabStrip) {
+    if (!tabStrip) return null;
+    const tabList =
+      tabStrip.querySelector(':scope > [role="tablist"]') ??
+      tabStrip.querySelector('[role="tablist"]');
+    if (!tabList) return null;
+    let tabTrack = tabList;
+    while (tabTrack.parentElement && tabTrack.parentElement !== tabStrip) {
+      tabTrack = tabTrack.parentElement;
+    }
+    if (tabTrack.parentElement !== tabStrip) tabTrack = tabList;
+    return { tabList, tabTrack };
   }
 
   function setWorkspaceDetailActive(active) {
@@ -3252,9 +3270,11 @@
     const tabStrip = pane.querySelector(
       '[data-app-shell-tab-strip-controller="right"]',
     );
-    const tabList = tabStrip?.querySelector(':scope > [role="tablist"]');
+    const tabParts = workspaceTabListParts(tabStrip);
+    const tabList = tabParts?.tabList;
+    const tabTrack = tabParts?.tabTrack;
     const header = tabStrip?.parentElement;
-    if (!tabStrip || !tabList || !header) return null;
+    if (!tabStrip || !tabList || !tabTrack || !header) return null;
 
     const tabHost = document.createElement("div");
     tabHost.id = "spine-codex-workspace-tab";
@@ -3431,7 +3451,8 @@
       pane,
       tabStrip,
       tabList,
-      originalTabListWidth: tabList.style.width,
+      tabTrack,
+      originalTabTrackWidth: tabTrack.style.width,
       originalNativeTabCount,
       tabHost,
       tabRoot,
@@ -3465,11 +3486,19 @@
     ui.tabObserver = new MutationObserver(() => {
       queueMicrotask(() => syncWorkspaceTabList(ui));
     });
-    ui.tabObserver.observe(tabList, {
-      childList: true,
-      attributes: true,
-      attributeFilter: ["style"],
-    });
+    if (tabTrack === tabList) {
+      ui.tabObserver.observe(tabList, {
+        childList: true,
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+    } else {
+      ui.tabObserver.observe(tabList, { childList: true });
+      ui.tabObserver.observe(tabTrack, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+    }
     syncWorkspaceTabList(ui);
     setWorkspaceDetailActive(state.detailTabActive);
     return state.detailUi;

@@ -107,8 +107,8 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.2.2");
-assert.equal(api.revision, 3);
+assert.equal(api.version, "0.2.2.1");
+assert.equal(api.revision, 4);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -743,6 +743,9 @@ assert.match(source, /spine-codex-workspace-tab/);
 assert.match(source, /data-app-shell-tabs="true"/);
 assert.match(source, /data-app-shell-tab-strip-controller="right"/);
 assert.match(source, /:scope > \[role="tablist"\]/);
+assert.match(source, /tabStrip\.querySelector\('\[role="tablist"\]'\)/);
+assert.match(source, /while \(tabTrack\.parentElement/);
+assert.match(source, /ui\.tabTrack\.style\.width/);
 assert.match(source, /tabList\.append\(tabHost\)/);
 assert.match(source, /workspaceTabListWidth/);
 assert.match(source, /setWorkspaceDetailActive/);
@@ -977,8 +980,8 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.2.2");
-assert.equal(restoredApi.revision, 3);
+assert.equal(restoredApi.version, "0.2.2.1");
+assert.equal(restoredApi.revision, 4);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&

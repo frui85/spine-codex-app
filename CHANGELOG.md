@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.2.2.1 — 2026-08-07
+
+Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
+
 - Adds a Windows x64 portable build with native GUI and CLI-shim executables, an independently verified Node.js runtime, Codex Store-app discovery, and no bundled upstream binaries.
 - Finds the Windows Store ChatGPT/Codex executable from its stable AppX package identity and manifest instead of relying on the Start menu display name.
 - Identifies and patches the app-server version check by its stable error-prefix and comparator structure instead of minified export names, restoring SpineCodex SSH compatibility after Codex Desktop updates.
@@ -11,6 +15,8 @@
 - Restricts the Electron main preload to the browser main thread so worker processes cannot overwrite its verified readiness status.
 - Injects the Windows main-process hook through a temporary loopback-only `--inspect-brk` session before Codex executes its main script, bypassing Store builds that ignore `NODE_OPTIONS`; startup resumes only after the hook loads and still requires the authoritative readiness handshake before renderer injection.
 - Restores Spine View automatically after a Codex renderer crash or BrowserWindow replacement by keeping two narrow Electron lifecycle listeners in the verified main hook; the renderer source is SHA-256 checked and injected only into `app://-/index.html`, without polling or a guardian process.
+- Adapts the interactive Spine detail tab to Codex Desktop's nested right-panel tab strip, restoring node clicks and preventing an endless detail-mount retry after the App layout update.
+- Adds a tag-driven GitHub Actions release pipeline that validates the source version, builds and verifies both macOS architectures, and publishes only after all assets are ready; Windows workflow code remains disabled.
 
 ## v0.2.2 — 2026-08-03
 

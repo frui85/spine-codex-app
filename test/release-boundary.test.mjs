@@ -28,15 +28,19 @@ const mainInspector = await readFile(
   "utf8",
 );
 
-test("public release version tracks SpineCodex 0.2.2", () => {
+test("wrapper revision 0.2.2.1 tracks SpineCodex 0.2.2", () => {
   assert.equal(metadata.version, "0.2.2");
-  assert.match(launcher, /APP_VERSION = "0\.2\.2"/);
+  assert.equal(metadata.spineAppVersion, "0.2.2.1");
+  assert.equal(metadata.spineCodexVersion, "0.2.2");
+  assert.match(launcher, /APP_VERSION = "0\.2\.2\.1"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(renderer, /VERSION = "0\.2\.2"/);
+  assert.match(renderer, /VERSION = "0\.2\.2\.1"/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
   assert.match(builder, /NODE_VERSION = "v22\.23\.2"/);
+  assert.match(builder, /metadata\.spineAppVersion/);
+  assert.match(builder, /valueAfter\("--version"\)/);
   assert.match(builder, /nodejs\.org\/dist/);
   assert.doesNotMatch(builder, /@spinejit|GhabiX|SpineCodex\/releases|npm pack/);
   assert.deepEqual(metadata.dependencies, undefined);
@@ -46,6 +50,7 @@ test("release builder bundles only wrapper files and a pinned Node runtime", () 
 test("Windows portable build contains native launchers but no upstream binary", () => {
   assert.equal(metadata.scripts["build:windows"], "node scripts/build-windows-release.mjs --arch x64");
   assert.match(windowsBuilder, /NODE_VERSION = "v22\.23\.2"/);
+  assert.match(windowsBuilder, /metadata\.spineAppVersion/);
   assert.match(windowsBuilder, /node-\$\{NODE_VERSION\}-win-\$\{ARCHITECTURE\}/);
   assert.match(windowsBuilder, /x86_64-w64-mingw32-gcc/);
   assert.match(windowsBuilder, /SpineCodex App\.exe/);

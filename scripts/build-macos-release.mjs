@@ -18,7 +18,14 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadata = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
-const VERSION = metadata.version;
+const VERSION = valueAfter("--version") ?? metadata.spineAppVersion ?? metadata.version;
+const SOURCE_VERSION = metadata.spineAppVersion ?? metadata.version;
+if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(VERSION)) {
+  throw new Error(`invalid release version: ${VERSION}`);
+}
+if (VERSION !== SOURCE_VERSION) {
+  throw new Error(`release version ${VERSION} does not match source ${SOURCE_VERSION}`);
+}
 const NODE_VERSION = "v22.23.2";
 const BUNDLE_NAME = "SpineCodex App";
 const BUNDLE_ID = "io.github.izumedonabe.spine-codex-app";
@@ -201,6 +208,8 @@ exit 1
 }
 
 function infoPlist(architecture) {
+  const [major, minor, patch, revision = "0"] = VERSION.split(".");
+  const marketingVersion = `${major}.${minor}.${patch}`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -213,8 +222,8 @@ function infoPlist(architecture) {
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>${BUNDLE_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${marketingVersion}</string>
+  <key>CFBundleVersion</key><string>${revision}</string>
   <key>LSArchitecturePriority</key><array><string>${architecture === "arm64" ? "arm64" : "x86_64"}</string></array>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>

@@ -69,5 +69,5 @@ test("version command does not require installed dependencies", () => {
     env: { ...process.env, PATH: "/usr/bin:/bin" },
   });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), "spine-app 0.2.2");
+  assert.equal(result.stdout.trim(), "spine-app 0.2.2.1");
 });
