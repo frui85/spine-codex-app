@@ -1,6 +1,7 @@
 "use strict";
 
 const Module = require("node:module");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { isMainThread } = require("node:worker_threads");
@@ -14,6 +15,9 @@ const SHARED_BUNDLE_PATTERN = /^src-[A-Za-z0-9_-]+\.js$/;
 const REMOTE_SOCKET_MARKER = "[d]esktop-ssh-websocket-v0.sock";
 const VERSION_ERROR_MARKER = "codex-app-server-version-unsupported:";
 const DEFAULT_HOOK_DEADLINE_MS = 30_000;
+const RENDERER_PATH_ENV = "SPINE_CODEX_RENDERER_PATH";
+const RENDERER_SHA256_ENV = "SPINE_CODEX_RENDERER_SHA256";
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const VERSION_CHECK_PATTERN =
   /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2===([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\(\2,([A-Za-z_$][\w$]*)\)>=0\}/g;
 const STABLE_VERSION_PATTERN =
@@ -255,6 +259,118 @@ function writeHookStatus(statusPath, state, details = {}) {
   }
 }
 
+function isCodexMainSurfaceUrl(value) {
+  try {
+    const url = new URL(String(value ?? ""));
+    return (
+      url.protocol === "app:" &&
+      url.hostname === "-" &&
+      url.pathname === "/index.html"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function loadRendererPayload(options = {}) {
+  const rendererPath = options.rendererPath ?? process.env[RENDERER_PATH_ENV];
+  const expectedSha256 = String(
+    options.rendererSha256 ?? process.env[RENDERER_SHA256_ENV] ?? "",
+  ).toLowerCase();
+  if (!rendererPath && !expectedSha256) return null;
+  if (!rendererPath || !path.isAbsolute(rendererPath)) {
+    throw new Error("SpineCodex renderer path must be absolute");
+  }
+  if (!SHA256_PATTERN.test(expectedSha256)) {
+    throw new Error("SpineCodex renderer SHA-256 is missing or invalid");
+  }
+  const source = fs.readFileSync(rendererPath, "utf8");
+  const actualSha256 = crypto.createHash("sha256").update(source).digest("hex");
+  if (actualSha256 !== expectedSha256) {
+    throw new Error("SpineCodex renderer SHA-256 mismatch");
+  }
+  return Object.freeze({
+    path: path.resolve(rendererPath),
+    source,
+    sha256: actualSha256,
+  });
+}
+
+function installRendererRecovery(options = {}) {
+  const payload = options.payload ?? loadRendererPayload(options);
+  if (payload == null) return null;
+  const electron = options.electron ?? require("electron");
+  const app = electron?.app;
+  const webContents = electron?.webContents;
+  if (!app?.on || !app?.whenReady || !webContents?.getAllWebContents) {
+    throw new Error("Electron renderer recovery APIs are unavailable");
+  }
+
+  const attached = new WeakSet();
+  const inFlight = new WeakMap();
+  let disposed = false;
+
+  const isMainSurface = (contents) => {
+    if (!contents || contents.isDestroyed?.()) return false;
+    if (typeof contents.getType === "function" && contents.getType() !== "window") {
+      return false;
+    }
+    return isCodexMainSurfaceUrl(contents.getURL?.());
+  };
+
+  const inject = (contents, reason = "did-finish-load") => {
+    if (disposed || !isMainSurface(contents)) return Promise.resolve(false);
+    const active = inFlight.get(contents);
+    if (active) return active;
+    const pending = Promise.resolve()
+      .then(() => contents.executeJavaScript(payload.source, false))
+      .then(() => true)
+      .catch((error) => {
+        console.error(
+          `[SpineCodex] renderer recovery failed (${reason}):`,
+          error?.stack ?? error,
+        );
+        return false;
+      })
+      .finally(() => {
+        if (inFlight.get(contents) === pending) inFlight.delete(contents);
+      });
+    inFlight.set(contents, pending);
+    return pending;
+  };
+
+  const attach = (contents) => {
+    if (disposed || !contents?.on || attached.has(contents)) return false;
+    attached.add(contents);
+    contents.on("did-finish-load", () => { void inject(contents); });
+    // This covers a hook installed after an already-loaded main surface while
+    // remaining a one-shot event-driven check. Normal startup is handled by
+    // did-finish-load, and renderer crash reloads emit it again.
+    if (contents.isLoadingMainFrame?.() === false) {
+      setImmediate(() => { void inject(contents, "existing-surface"); });
+    }
+    return true;
+  };
+
+  const onWebContentsCreated = (_event, contents) => { attach(contents); };
+  app.on("web-contents-created", onWebContentsCreated);
+  void app.whenReady().then(() => {
+    if (disposed) return;
+    for (const contents of webContents.getAllWebContents()) attach(contents);
+  });
+
+  return Object.freeze({
+    payload,
+    attach,
+    inject,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      app.removeListener?.("web-contents-created", onWebContentsCreated);
+    },
+  });
+}
+
 function installMainProcessHook(options = {}) {
   if (
     options.force !== true &&
@@ -266,6 +382,17 @@ function installMainProcessHook(options = {}) {
   const statusPath =
     options.statusPath ?? process.env.SPINE_CODEX_MAIN_HOOK_STATUS;
   const deadlineMs = options.deadlineMs ?? DEFAULT_HOOK_DEADLINE_MS;
+
+  let rendererRecovery = null;
+  try {
+    rendererRecovery = installRendererRecovery(options.rendererRecoveryOptions);
+  } catch (error) {
+    writeHookStatus(statusPath, "incompatible", {
+      reason: String(error?.message ?? error),
+      rendererRecovery: false,
+    });
+    throw error;
+  }
 
   const originalExtension = Module._extensions[".js"];
   let patchedMainFilename = null;
@@ -296,6 +423,8 @@ function installMainProcessHook(options = {}) {
       mainFile: path.basename(patchedMainFilename),
       versionFile: path.basename(patchedVersionFilename),
       minimum,
+      rendererRecovery: rendererRecovery != null,
+      rendererSha256: rendererRecovery?.payload.sha256 ?? null,
     });
     return true;
   };
@@ -387,6 +516,9 @@ module.exports = {
   patchVersionCompatibilitySource,
   patchVersionBundleCandidateSource,
   writeHookStatus,
+  isCodexMainSurfaceUrl,
+  loadRendererPayload,
+  installRendererRecovery,
   installMainProcessHook,
 };
 

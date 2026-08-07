@@ -120,6 +120,8 @@ npm run build:windows
 
 The build uses the official checksum-pinned Windows Node.js runtime and two tiny native x64 launchers compiled from this repository. It does not download or package Codex Desktop or SpineCodex. Windows code signing and real-device startup validation are still required before publishing it as a supported GitHub Release asset.
 
+Microsoft Store builds can ignore `NODE_OPTIONS` even when the packaged launcher does not expose a readable Electron fuse wire. On Windows, the wrapper therefore starts Electron paused on a fresh loopback-only Inspector port, loads the main-process hook in the paused CommonJS frame, resumes immediately, and closes the Inspector connection. Renderer injection proceeds only after the hook reports that both compatibility patches are ready. If Inspector injection or that handshake fails, the wrapper refuses to continue silently with an unpatched official-Codex backend.
+
 <details>
 <summary><strong>Automatic path discovery</strong></summary>
 
@@ -147,12 +149,19 @@ SpineCodex App
   ├─ launches the installed Codex Desktop app
   ├─ points local app-server startup at the installed spine-codex
   ├─ selects spine-codex for Codex's native SSH startup path
-  └─ injects one event-driven renderer extension
+  └─ injects and recovers one event-driven renderer extension
        ├─ turn/spineTree/updated
        └─ turn/spineSpawnProgress/updated
 ```
 
 The launcher does not modify `app.asar`, replace the Codex React tree, or patch the application on disk. Renderer integration uses a Shadow DOM surface and narrow structural hooks. Both local and remote startup use the portable command name `spine-codex`: the local `PATH` resolves the wrapper's private shim, while each SSH login shell resolves its own installation. Remote bootstrap is serialized and idempotent: it reuses a healthy SpineCodex server, replaces only a same-user stale or official-Codex socket owner, and does not start the proxy until the Unix socket is demonstrably ready. A one-time launcher/main-process readiness handshake verifies the version and bootstrap structures before startup is reported as successful; unknown bundles fail closed.
+
+The verified main hook also keeps two narrow Electron lifecycle listeners. On a
+main-window `did-finish-load`—including a reload after an Electron renderer
+crash—it SHA-256 verifies the packaged `spine-view.js` and executes it only in
+the exact `app://-/index.html` surface. There is no timer, polling watchdog, or
+extra resident process. The renderer's own revision guard makes the initial
+CDP injection and any recovery injection idempotent.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled runtime notices.
 
@@ -169,7 +178,7 @@ cd spine-codex-app
 ./spine-app /path/to/workspace
 ```
 
-Source usage requires Node.js 22 or newer. Opening without a path launches the existing Codex interface; it does not create a task rooted at `/`. The launcher exits after registering the renderer, while Codex Desktop keeps running.
+Source usage requires Node.js 22 or newer. Opening without a path launches the existing Codex interface; it does not create a task rooted at `/`. The launcher exits after verifying the main hook and initial renderer injection; Codex Desktop keeps running, and the in-process lifecycle listeners recover Spine View if Electron replaces its renderer.
 
 </details>
 
@@ -178,7 +187,7 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 
 Release versions track the minimum supported SpineCodex release. This release is **v0.2.2** and requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
 
-The macOS wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, `26.730.61309`, and `26.730.61639`. The Windows x64 package is cross-built and structurally verified on macOS but is not yet claimed as real-device validated. Codex internals can change, so compatibility-sensitive hooks identify both the SSH bootstrap and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
+The macOS wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, `26.730.61309`, and `26.730.61639`. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the new main-process Inspector path is awaiting another real-device run and is not yet claimed as a supported GitHub Release asset. Codex internals can change, so compatibility-sensitive hooks identify both the SSH bootstrap and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
 
 ```sh
 npm run check

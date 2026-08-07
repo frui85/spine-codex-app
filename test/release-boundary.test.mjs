@@ -6,6 +6,10 @@ const root = new URL("../", import.meta.url);
 const metadata = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
 const launcher = await readFile(new URL("spine-app.mjs", root), "utf8");
 const renderer = await readFile(new URL("spine-view.js", root), "utf8");
+const mainHook = await readFile(
+  new URL("spine-electron-main-hook.cjs", root),
+  "utf8",
+);
 const builder = await readFile(new URL("scripts/build-macos-release.mjs", root), "utf8");
 const windowsBuilder = await readFile(
   new URL("scripts/build-windows-release.mjs", root),
@@ -17,6 +21,10 @@ const windowsLauncher = await readFile(
 );
 const windowsCliShim = await readFile(
   new URL("bin/spine-codex.mjs", root),
+  "utf8",
+);
+const mainInspector = await readFile(
+  new URL("lib/main-inspector.mjs", root),
   "utf8",
 );
 
@@ -49,12 +57,30 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(windowsLauncher, /CREATE_NO_WINDOW/);
   assert.match(windowsCliShim, /SPINE_CODEX_BINARY/);
   assert.match(windowsCliShim, /"--disable",\s*"image_generation"/);
+  assert.match(windowsBuilder, /lib", "main-inspector\.mjs/);
+  assert.match(launcher, /--inspect-brk=127\.0\.0\.1:/);
+  assert.match(launcher, /injectMainProcessHook/);
+  assert.match(mainInspector, /Debugger\.evaluateOnCallFrame/);
+  assert.match(mainInspector, /Debugger\.resume/);
 });
 
 test("no-argument launch does not create a root workspace task", () => {
   assert.match(launcher, /workspace: null/);
   assert.match(launcher, /args\.workspace == null\s*\? null/);
   assert.match(launcher, /if \(deepLink\) openArguments\.push\(deepLink\)/);
+});
+
+test("renderer injection survives Electron renderer replacement", () => {
+  assert.match(launcher, /SPINE_CODEX_RENDERER_PATH:/);
+  assert.match(launcher, /SPINE_CODEX_RENDERER_SHA256:/);
+  assert.match(launcher, /rendererRecovery !== true/);
+  assert.match(mainHook, /web-contents-created/);
+  assert.match(mainHook, /did-finish-load/);
+  assert.match(mainHook, /executeJavaScript\(payload\.source, false\)/);
+  assert.match(mainHook, /url\.protocol === "app:"/);
+  assert.match(mainHook, /url\.pathname === "\/index\.html"/);
+  assert.match(mainHook, /SHA-256 mismatch/);
+  assert.doesNotMatch(mainHook, /setInterval\(/);
 });
 
 test("local dependency paths are discovered without translated UI labels", () => {
@@ -69,4 +95,10 @@ test("local dependency paths are discovered without translated UI labels", () =>
   assert.match(launcher, /Get-StartApps/);
   assert.doesNotMatch(launcher, /Get-StartApps -Name 'Codex'/);
   assert.match(launcher, /process\.platform === "win32"/);
+  assert.match(launcher, /Inspector fuse marker \$\{nodeCliInspectFuse\}; runtime injection required/);
+  assert.match(launcher, /!\["off", "removed"\]\.includes\(nodeCliInspectFuse\)/);
+  assert.match(launcher, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
+  assert.match(launcher, /Codex was not allowed to/);
+  assert.match(launcher, /process\.platform === "win32" \? 20_000 : 5_000/);
+  assert.match(launcher, /no renderer code was injected/);
 });

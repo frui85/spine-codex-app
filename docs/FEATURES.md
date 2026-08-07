@@ -22,10 +22,13 @@ node spine-app.mjs /path/to/workspace
 
 Quit Codex Desktop completely before launching. The wrapper uses a random
 loopback-only CDP port, validates the renderer WebSocket, registers the
-renderer for the current document and subsequent document loads, injects the
-section, and then exits. Conversation navigation or an in-App renderer reload
-therefore does not remove Spine View; a full App process restart still needs to
-be launched through the wrapper again.
+renderer for the initial target, injects the section, and then exits. The
+verified Electron main hook independently keeps narrow `web-contents-created`
+and `did-finish-load` listeners. It SHA-256 verifies `spine-view.js` and
+executes it only in the exact `app://-/index.html` main surface, so a renderer
+crash, reload, or BrowserWindow replacement restores Spine View without a
+launcher watchdog. A full App process restart still needs to be launched
+through the wrapper again.
 
 On Windows, the portable package resolves the stable
 `OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0` package family and its AppX manifest to
@@ -37,6 +40,16 @@ native executable adapts Codex's backend launch to an externally installed npm
 `spine-codex.cmd`. Both executables are small repository-built shims; neither
 contains SpineCodex. The Windows package must stay together because its private
 Node runtime and wrapper files are resolved relative to the launcher.
+
+The AppX executable can be a packaged launcher rather than the Electron binary
+that carries the fuse wire, and current Store builds can ignore `NODE_OPTIONS`.
+Windows therefore uses a separate pre-entry path: the launcher supplies a fresh
+loopback-only `--inspect-brk` port, loads the main hook in the paused CommonJS
+frame through the Node Inspector protocol, resumes the process, and immediately
+closes that connection. The renderer is still injected only after the hook
+writes a verified `ready` handshake for both required bundle structures. A
+known-disabled Node CLI Inspector fuse is a hard preflight failure; an unreadable
+packaged-launcher fuse is resolved authoritatively by the runtime injection.
 
 ## Remote SSH hosts
 
@@ -94,7 +107,10 @@ The preload runs only in Electron's browser main thread. Main and version
 chunks can load in either order, so both targets are recognized independently
 by content; worker, renderer, and utility processes remain untouched. Once
 both patches are verified, the loader hook is removed and a one-time status
-handshake lets the launcher continue. Unknown structures fail closed with an
+handshake lets the launcher continue. Its renderer-recovery event listeners
+remain, but perform work only when the main `app://-/index.html` surface
+finishes loading; they do not poll. Unknown structures, a missing renderer
+recovery registration, or a renderer hash mismatch fail closed with an
 explicit startup error. No `app.asar` file or App signature is modified.
 
 SpineCodex's `--version` output is parsed honestly for the compatibility gate.

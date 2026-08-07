@@ -45,6 +45,7 @@ await rm(buildRoot, { recursive: true, force: true });
 await mkdir(downloads, { recursive: true });
 await mkdir(dist, { recursive: true });
 await mkdir(join(wrapper, "bin"), { recursive: true });
+await mkdir(join(wrapper, "lib"), { recursive: true });
 await mkdir(runtime, { recursive: true });
 await mkdir(licenses, { recursive: true });
 
@@ -68,6 +69,10 @@ for (const name of [
   await copyFile(join(ROOT, name), join(wrapper, name));
 }
 await copyFile(join(ROOT, "bin", "spine-codex.mjs"), join(wrapper, "bin", "spine-codex.mjs"));
+await copyFile(
+  join(ROOT, "lib", "main-inspector.mjs"),
+  join(wrapper, "lib", "main-inspector.mjs"),
+);
 await copyFile(join(ROOT, "LICENSE"), join(releaseRoot, "LICENSE"));
 await copyFile(join(ROOT, "NOTICE"), join(releaseRoot, "NOTICE"));
 await writeFile(join(releaseRoot, "README-Windows.txt"), windowsReadme());

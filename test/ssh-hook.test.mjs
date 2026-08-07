@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -19,11 +21,13 @@ const shimPath = new URL(
   "../bin/spine-codex",
   import.meta.url,
 );
+const rendererPath = new URL("../spine-view.js", import.meta.url);
 
 const hook = require(fileURLToPath(hookPath));
 const hookSource = await readFile(hookPath, "utf8");
 const wrapperSource = await readFile(wrapperPath, "utf8");
 const shimSource = await readFile(shimPath, "utf8");
+const rendererSource = await readFile(rendererPath, "utf8");
 
 assert.equal(hook.DEFAULT_MIN_SPINE_VERSION, "0.2.2");
 assert.deepEqual(hook.parseVersion("0.2.2"), [0, 2, 2]);
@@ -195,15 +199,89 @@ assert.match(wrapperSource, /PATH: appSearchPath/);
 assert.match(wrapperSource, /NODE_OPTIONS: nodeOptions/);
 assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
 assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
-assert.match(wrapperSource, /waitForMainHookReady\(mainHookStatusPath\)/);
+assert.match(wrapperSource, /SPINE_CODEX_RENDERER_PATH:/);
+assert.match(wrapperSource, /SPINE_CODEX_RENDERER_SHA256:/);
+assert.match(wrapperSource, /rendererRecovery !== true/);
+assert.match(
+  wrapperSource,
+  /waitForMainHookReady\(\s*mainHookStatusPath,\s*process\.platform === "win32" \? 20_000 : 5_000,/,
+);
 assert.match(wrapperSource, /--require \$\{JSON\.stringify\(ELECTRON_MAIN_HOOK\)\}/);
 assert.match(wrapperSource, /--require "\$\{ELECTRON_MAIN_HOOK/);
-assert.match(wrapperSource, /readNodeOptionsFuse/);
+assert.match(wrapperSource, /readElectronFuse/);
 assert.match(wrapperSource, /NODE_OPTIONS_FUSE_INDEX = 2/);
+assert.match(wrapperSource, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
 
 assert.match(shimSource, /SPINE_CODEX_BINARY/);
 assert.match(shimSource, /--disable image_generation/);
 assert.match(shimSource, /"\$@"/);
+
+assert.equal(hook.isCodexMainSurfaceUrl("app://-/index.html"), true);
+assert.equal(hook.isCodexMainSurfaceUrl("app://-/index.html#/thread/1"), true);
+assert.equal(hook.isCodexMainSurfaceUrl("https://example.com/index.html"), false);
+assert.equal(hook.isCodexMainSurfaceUrl("app://-/settings.html"), false);
+
+const rendererSha256 = createHash("sha256").update(rendererSource).digest("hex");
+const rendererPayload = hook.loadRendererPayload({
+  rendererPath: fileURLToPath(rendererPath),
+  rendererSha256,
+});
+assert.equal(rendererPayload.sha256, rendererSha256);
+assert.equal(rendererPayload.source, rendererSource);
+assert.throws(
+  () => hook.loadRendererPayload({
+    rendererPath: fileURLToPath(rendererPath),
+    rendererSha256: "0".repeat(64),
+  }),
+  /SHA-256 mismatch/,
+);
+
+class FakeWebContents extends EventEmitter {
+  constructor(url, type = "window") {
+    super();
+    this.url = url;
+    this.type = type;
+    this.executions = [];
+  }
+  getURL() { return this.url; }
+  getType() { return this.type; }
+  isDestroyed() { return false; }
+  isLoadingMainFrame() { return true; }
+  async executeJavaScript(source, userGesture) {
+    this.executions.push({ source, userGesture });
+  }
+}
+
+const fakeApp = new EventEmitter();
+fakeApp.whenReady = async () => {};
+const existingContents = [];
+const recovery = hook.installRendererRecovery({
+  payload: Object.freeze({
+    path: fileURLToPath(rendererPath),
+    source: "globalThis.__spineRecoveryProbe = true;",
+    sha256: rendererSha256,
+  }),
+  electron: {
+    app: fakeApp,
+    webContents: { getAllWebContents: () => existingContents },
+  },
+});
+const mainSurface = new FakeWebContents("app://-/index.html#/thread/one");
+fakeApp.emit("web-contents-created", {}, mainSurface);
+mainSurface.emit("did-finish-load");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(mainSurface.executions.length, 1);
+assert.equal(mainSurface.executions[0].userGesture, false);
+// A renderer crash/reload uses the same webContents and emits another load.
+mainSurface.emit("did-finish-load");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(mainSurface.executions.length, 2);
+const devtoolsSurface = new FakeWebContents("devtools://devtools/bundled/", "window");
+fakeApp.emit("web-contents-created", {}, devtoolsSurface);
+devtoolsSurface.emit("did-finish-load");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(devtoolsSurface.executions.length, 0);
+recovery.dispose();
 
 const fixtureDirectory = await mkdtemp(join(tmpdir(), "spine-main-hook-test-"));
 const fixtureMain = join(fixtureDirectory, "main-deferred.js");
@@ -241,6 +319,17 @@ try {
     force: true,
     statusPath: fixtureStatus,
     deadlineMs: 2_000,
+    rendererRecoveryOptions: {
+      payload: Object.freeze({
+        path: fileURLToPath(rendererPath),
+        source: "globalThis.__spineRecoveryFixture = true;",
+        sha256: rendererSha256,
+      }),
+      electron: {
+        app: Object.assign(new EventEmitter(), { whenReady: async () => {} }),
+        webContents: { getAllWebContents: () => [] },
+      },
+    },
   }), true);
   const earlyVersion = require(fixtureBridge);
   assert.equal(earlyVersion.check("0.2.2"), true);
@@ -251,6 +340,8 @@ try {
   assert.equal(deferredMain.check("0.2.1"), false);
   const hookStatus = JSON.parse(await readFile(fixtureStatus, "utf8"));
   assert.equal(hookStatus.state, "ready");
+  assert.equal(hookStatus.rendererRecovery, true);
+  assert.equal(hookStatus.rendererSha256, rendererSha256);
   assert.equal(hookStatus.mainFile, "main-deferred.js");
   assert.equal(hookStatus.versionFile, "src-version.js");
 } finally {

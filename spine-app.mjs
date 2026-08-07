@@ -2,10 +2,12 @@
 import { access, open as openFile, readFile, readdir } from "node:fs/promises";
 import { accessSync, constants } from "node:fs";
 import { createServer } from "node:net";
+import { createHash } from "node:crypto";
 import { homedir, release as osRelease, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { injectMainProcessHook } from "./lib/main-inspector.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const APP_VERSION = "0.2.2";
@@ -27,6 +29,7 @@ const ELECTRON_FUSE_SENTINEL = Buffer.from(
   "ascii",
 );
 const NODE_OPTIONS_FUSE_INDEX = 2;
+const NODE_CLI_INSPECT_FUSE_INDEX = 3;
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
@@ -66,7 +69,6 @@ if (!diagnosis.ok) {
 const {
   spineCodex,
   appPath,
-  nodeOptionsFuse,
   versionOutput,
   commandSearchPath,
   rendererSource: SCRIPT,
@@ -77,6 +79,7 @@ if (isAppRunning(appPath)) {
 }
 
 const debugPort = await reservePort();
+const mainInspectorPort = process.platform === "win32" ? await reservePort() : null;
 const mainHookStatusPath = join(
   tmpdir(),
   `spine-codex-main-hook-${process.pid}-${debugPort}.json`,
@@ -103,13 +106,44 @@ const appEnvironment = {
   SPINE_CODEX_BINARY: spineCodex,
   SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
   SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
+  SPINE_CODEX_RENDERER_PATH: join(HERE, "spine-view.js"),
+  SPINE_CODEX_RENDERER_SHA256: createHash("sha256").update(SCRIPT).digest("hex"),
   NODE_OPTIONS: nodeOptions,
 };
-await launchCodexApp({ appPath, deepLink, debugPort, appEnvironment });
+const launchedApp = await launchCodexApp({
+  appPath,
+  deepLink,
+  debugPort,
+  mainInspectorPort,
+  appEnvironment,
+});
 
-process.stdout.write("Waiting for Codex renderer… ");
-const target = await waitForTarget(debugPort);
-await waitForMainHookReady(mainHookStatusPath);
+if (mainInspectorPort != null) {
+  process.stdout.write("Injecting SpineCodex into Codex main process… ");
+  try {
+    await injectMainProcessHook({
+      port: mainInspectorPort,
+      hookPath: ELECTRON_MAIN_HOOK,
+      timeoutMs: 15_000,
+    });
+  } catch (error) {
+    try { launchedApp?.kill(); } catch {}
+    fail(
+      "Windows main-process injection failed; Codex was not allowed to " +
+        `continue unpatched: ${error.message}`,
+    );
+  }
+  console.log("ready.");
+}
+
+process.stdout.write("Waiting for Codex renderer and main-process hook… ");
+const [target] = await Promise.all([
+  waitForTarget(debugPort),
+  waitForMainHookReady(
+    mainHookStatusPath,
+    process.platform === "win32" ? 20_000 : 5_000,
+  ),
+]);
 await inject(target.webSocketDebuggerUrl, debugPort, SCRIPT);
 console.log("Spine Tree ready.");
 
@@ -322,6 +356,7 @@ async function diagnose(options) {
 
   const appPath = options.app ? resolve(options.app) : await findApp();
   let nodeOptionsFuse = null;
+  let nodeCliInspectFuse = null;
   if (!appPath) {
     add(
       "error",
@@ -340,17 +375,50 @@ async function diagnose(options) {
           throw new Error("the Windows App path must point to an .exe file");
         }
       }
-      nodeOptionsFuse = await readNodeOptionsFuse(appPath);
-      if (nodeOptionsFuse !== "on") {
+      nodeOptionsFuse = await readElectronFuse(appPath, NODE_OPTIONS_FUSE_INDEX);
+      nodeCliInspectFuse = await readElectronFuse(
+        appPath,
+        NODE_CLI_INSPECT_FUSE_INDEX,
+      );
+      if (process.platform === "win32" && nodeCliInspectFuse === "on") {
+        add("ok", "Codex Desktop", appPath);
+        add(
+          "ok",
+          "SSH compatibility hook",
+          "Electron main-process Inspector injection is enabled",
+        );
+      } else if (
+        process.platform === "win32" &&
+        !["off", "removed"].includes(nodeCliInspectFuse)
+      ) {
+        // Microsoft Store packages can expose a launcher executable while the
+        // Electron runtime lives behind the package activation boundary. The
+        // fuse sentinel is therefore not a reliable preflight requirement on
+        // Windows. The post-launch status-file handshake below is authoritative:
+        // the wrapper never injects the renderer unless the main hook reports
+        // that both structural patches were installed.
+        add("ok", "Codex Desktop", appPath);
+        add(
+          "info",
+          "SSH compatibility hook",
+          `Inspector fuse marker ${nodeCliInspectFuse}; runtime injection required`,
+        );
+      } else if (process.platform === "darwin" && nodeOptionsFuse === "on") {
+        add("ok", "Codex Desktop", appPath);
+        add("ok", "SSH compatibility hook", "Electron NODE_OPTIONS fuse is enabled");
+      } else {
+        const fuseName = process.platform === "win32"
+          ? "main-process Inspector"
+          : "NODE_OPTIONS";
+        const fuseValue = process.platform === "win32"
+          ? nodeCliInspectFuse
+          : nodeOptionsFuse;
         add(
           "error",
           "Codex Desktop",
-          `${appPath} has incompatible Electron NODE_OPTIONS fuse: ${nodeOptionsFuse}`,
+          `${appPath} has incompatible Electron ${fuseName} fuse: ${fuseValue}`,
           `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
         );
-      } else {
-        add("ok", "Codex Desktop", appPath);
-        add("ok", "SSH compatibility hook", "Electron NODE_OPTIONS fuse is enabled");
       }
     } catch (error) {
       add(
@@ -371,6 +439,7 @@ async function diagnose(options) {
     spineCodex,
     appPath,
     nodeOptionsFuse,
+    nodeCliInspectFuse,
     versionOutput,
     rendererSource,
     commandSearchPath,
@@ -632,7 +701,12 @@ foreach ($entry in @(Get-StartApps)) {
     try {
       await access(candidate, constants.R_OK);
       firstReadable ??= candidate;
-      if (await readNodeOptionsFuseFromBinary(candidate) === "on") {
+      if (
+        await readElectronFuseFromBinary(
+          candidate,
+          NODE_CLI_INSPECT_FUSE_INDEX,
+        ) === "on"
+      ) {
         return candidate;
       }
     } catch {}
@@ -640,9 +714,9 @@ foreach ($entry in @(Get-StartApps)) {
   return firstReadable;
 }
 
-async function readNodeOptionsFuse(applicationPath) {
+async function readElectronFuse(applicationPath, fuseIndex) {
   if (process.platform === "win32") {
-    return readNodeOptionsFuseFromBinary(applicationPath);
+    return readElectronFuseFromBinary(applicationPath, fuseIndex);
   }
   const frameworksPath = join(applicationPath, "Contents", "Frameworks");
   const entries = await readdir(frameworksPath, { withFileTypes: true });
@@ -658,10 +732,10 @@ async function readNodeOptionsFuse(applicationPath) {
     frameworkBundle,
     frameworkName,
   );
-  return readNodeOptionsFuseFromBinary(framework);
+  return readElectronFuseFromBinary(framework, fuseIndex);
 }
 
-async function readNodeOptionsFuseFromBinary(binaryPath) {
+async function readElectronFuseFromBinary(binaryPath, fuseIndex) {
   const handle = await openFile(binaryPath, "r");
   const chunkSize = 1024 * 1024;
   const overlapSize = ELECTRON_FUSE_SENTINEL.length + 2 + 32;
@@ -683,12 +757,12 @@ async function readNodeOptionsFuseFromBinary(binaryPath) {
         }
         const schema = window[header];
         const count = window[header + 1];
-        if (schema !== 1 || count <= NODE_OPTIONS_FUSE_INDEX) return "unsupported";
+        if (schema !== 1 || count <= fuseIndex) return "unsupported";
         if (window.length < header + 2 + count) {
           overlap = window.subarray(sentinelIndex);
           continue;
         }
-        const value = window[header + 2 + NODE_OPTIONS_FUSE_INDEX];
+        const value = window[header + 2 + fuseIndex];
         return value === 0x31 ? "on" :
           value === 0x30 ? "off" :
           value === 0x32 ? "removed" :
@@ -732,7 +806,13 @@ if ($null -eq $running) { exit 1 } else { exit 0 }
   return check.status === 0 && check.stdout.trim() === "true";
 }
 
-async function launchCodexApp({ appPath, deepLink, debugPort, appEnvironment }) {
+async function launchCodexApp({
+  appPath,
+  deepLink,
+  debugPort,
+  mainInspectorPort,
+  appEnvironment,
+}) {
   const electronArguments = [
     "--remote-debugging-address=127.0.0.1",
     `--remote-debugging-port=${debugPort}`,
@@ -751,6 +831,10 @@ async function launchCodexApp({ appPath, deepLink, debugPort, appEnvironment }) 
       "--env",
       `SPINE_CODEX_MAIN_HOOK_STATUS=${appEnvironment.SPINE_CODEX_MAIN_HOOK_STATUS}`,
       "--env",
+      `SPINE_CODEX_RENDERER_PATH=${appEnvironment.SPINE_CODEX_RENDERER_PATH}`,
+      "--env",
+      `SPINE_CODEX_RENDERER_SHA256=${appEnvironment.SPINE_CODEX_RENDERER_SHA256}`,
+      "--env",
       `NODE_OPTIONS=${appEnvironment.NODE_OPTIONS}`,
       "-a",
       appPath,
@@ -760,11 +844,16 @@ async function launchCodexApp({ appPath, deepLink, debugPort, appEnvironment }) 
     const child = spawn("/usr/bin/open", openArguments, { stdio: "inherit" });
     const status = await new Promise((resolve) => child.once("exit", resolve));
     if (status !== 0) fail(`open exited with status ${status}`);
-    return;
+    return null;
   }
 
+  if (mainInspectorPort != null) {
+    electronArguments.unshift(
+      `--inspect-brk=127.0.0.1:${mainInspectorPort}`,
+    );
+  }
   const appArguments = deepLink
-    ? [deepLink, ...electronArguments]
+    ? [...electronArguments, deepLink]
     : electronArguments;
   const child = spawn(appPath, appArguments, {
     cwd: dirname(appPath),
@@ -778,6 +867,7 @@ async function launchCodexApp({ appPath, deepLink, debugPort, appEnvironment }) 
     child.once("error", reject);
   });
   child.unref();
+  return child;
 }
 
 function reservePort() {
@@ -816,14 +906,21 @@ async function waitForTarget(port) {
   throw new Error(`timed out waiting for Codex renderer: ${lastError?.message ?? "no target"}`);
 }
 
-async function waitForMainHookReady(statusPath) {
-  const deadline = Date.now() + 5_000;
+async function waitForMainHookReady(statusPath, timeoutMs = 5_000) {
+  const deadline = Date.now() + timeoutMs;
   let lastState = "not reported";
   while (Date.now() < deadline) {
     try {
       const status = JSON.parse(await readFile(statusPath, "utf8"));
       lastState = status.state ?? "invalid";
-      if (status.state === "ready") return status;
+      if (status.state === "ready") {
+        if (status.rendererRecovery !== true) {
+          throw new Error(
+            "the main-process hook did not install renderer crash recovery",
+          );
+        }
+        return status;
+      }
       if (status.state === "incompatible") {
         throw new Error(`incompatible Codex bundle: ${status.reason ?? "unknown structure"}`);
       }
@@ -835,7 +932,9 @@ async function waitForMainHookReady(statusPath) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(
-    `SpineCodex SSH compatibility hook did not become ready (last state: ${lastState})`,
+    "SpineCodex SSH compatibility hook did not become ready " +
+      `(last state: ${lastState}). The Codex Desktop build did not load ` +
+      "the main-process preload; no renderer code was injected.",
   );
 }
 

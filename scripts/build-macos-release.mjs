@@ -59,6 +59,7 @@ async function build(architecture) {
   await mkdir(dist, { recursive: true });
   await mkdir(macos, { recursive: true });
   await mkdir(wrapper, { recursive: true });
+  await mkdir(join(wrapper, "lib"), { recursive: true });
   await mkdir(runtime, { recursive: true });
   await mkdir(licenses, { recursive: true });
 
@@ -89,6 +90,10 @@ async function build(architecture) {
     await copyFile(join(ROOT, name), join(wrapper, name));
   }
   await cp(join(ROOT, "bin"), join(wrapper, "bin"), { recursive: true });
+  await copyFile(
+    join(ROOT, "lib", "main-inspector.mjs"),
+    join(wrapper, "lib", "main-inspector.mjs"),
+  );
   await chmod(join(wrapper, "bin", "spine-codex"), 0o755);
 
   await writeFile(join(macos, BUNDLE_NAME), appLauncher(), { mode: 0o755 });
