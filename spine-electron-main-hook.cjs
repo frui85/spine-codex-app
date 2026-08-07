@@ -18,6 +18,7 @@ const DEFAULT_HOOK_DEADLINE_MS = 30_000;
 const RENDERER_PATH_ENV = "SPINE_CODEX_RENDERER_PATH";
 const RENDERER_SHA256_ENV = "SPINE_CODEX_RENDERER_SHA256";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const ELECTRON_MAIN_SPECIFIERS = ["electron/main", "electron"];
 const VERSION_CHECK_PATTERN =
   /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2===([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\(\2,([A-Za-z_$][\w$]*)\)>=0\}/g;
 const STABLE_VERSION_PATTERN =
@@ -65,7 +66,16 @@ function remoteSpineIdentitySource() {
   ].join("");
 }
 
-function remoteBootstrapPrefixSource() {
+function remoteBootstrapPrefixSource({
+  forwardedAgentSetupVariable = null,
+  forwardedAgentSocketVariable = null,
+} = {}) {
+  const forwardedAgentSource =
+    forwardedAgentSetupVariable != null &&
+    forwardedAgentSocketVariable != null
+      ? "`," + forwardedAgentSetupVariable +
+        ",` && SSH_AUTH_SOCK=`," + forwardedAgentSocketVariable + ",` "
+      : "";
   return [
     "` || exit $?; ",
     "control_dir=\"\\${CODEX_HOME:-$HOME/.codex}/app-server-control\"; ",
@@ -101,6 +111,7 @@ function remoteBootstrapPrefixSource() {
     "owner=$(ps -o uid= -p \"$holder\" | tr -d ' '); ",
     "[ \"$owner\" != \"$current_uid\" ] || kill -9 \"$holder\" 2>/dev/null || true; done; ",
     "[ ! -S \"$control_socket\" ] || rm -f \"$control_socket\"; ",
+    forwardedAgentSource,
     "nohup sh -c 'exec \"$@\" </dev/null' sh `",
   ].join("");
 }
@@ -127,16 +138,37 @@ function remoteBootstrapSuffixSource(logPathVariable) {
 }
 
 function patchRemoteBootstrapCleanupSource(source) {
-  const cleanupPattern =
-    /` && \(pkill[^,]+`,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && nohup `/g;
-  const cleanupMatches = Array.from(String(source).matchAll(cleanupPattern));
-  if (cleanupMatches.length !== 1) {
+  const cleanupVariants = [
+    {
+      pattern:
+        /` && \(pkill[^,]+`,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && nohup `/g,
+      replacement: () => remoteBootstrapPrefixSource(),
+    },
+    {
+      // Codex 26.803+ prepares a forwarded SSH-agent socket between stale
+      // app-server cleanup and launch. Preserve both minified variables while
+      // replacing only the unsafe process cleanup and readiness behavior.
+      pattern:
+        /` && \(pkill[^,]+`,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && `,([A-Za-z_$][\w$]*),` && SSH_AUTH_SOCK=`,([A-Za-z_$][\w$]*),` nohup `/g,
+      replacement: (_, forwardedAgentSetupVariable, forwardedAgentSocketVariable) =>
+        remoteBootstrapPrefixSource({
+          forwardedAgentSetupVariable,
+          forwardedAgentSocketVariable,
+        }),
+    },
+  ];
+  const matches = cleanupVariants.flatMap(({ pattern, replacement }) =>
+    Array.from(String(source).matchAll(pattern), (match) => ({
+      match,
+      pattern,
+      replacement,
+    })),
+  );
+  if (matches.length !== 1) {
     throw new Error("Codex SSH app-server cleanup has an unsupported structure");
   }
-  let patched = String(source).replace(
-    cleanupPattern,
-    () => remoteBootstrapPrefixSource(),
-  );
+  const [{ pattern: cleanupPattern, replacement: cleanupReplacement }] = matches;
+  let patched = String(source).replace(cleanupPattern, cleanupReplacement);
 
   const readinessPattern = /,` >\$\{([A-Za-z_$][\w$]*)\} 2>&1 &`/g;
   const readinessMatches = Array.from(patched.matchAll(readinessPattern));
@@ -272,6 +304,33 @@ function isCodexMainSurfaceUrl(value) {
   }
 }
 
+function isDirectModuleMissing(error, specifier) {
+  if (error?.code !== "MODULE_NOT_FOUND") return false;
+  const firstLine = String(error?.message ?? "").split("\n", 1)[0];
+  return (
+    firstLine.includes(`'${specifier}'`) ||
+    firstLine.includes(`"${specifier}"`)
+  );
+}
+
+function loadElectronMainApi(requireFn = require) {
+  const unavailable = [];
+  for (const specifier of ELECTRON_MAIN_SPECIFIERS) {
+    try {
+      return requireFn(specifier);
+    } catch (error) {
+      if (!isDirectModuleMissing(error, specifier)) throw error;
+      unavailable.push(error);
+    }
+  }
+  const error = new Error(
+    "Electron main API is not available during the Node preload phase",
+  );
+  error.code = "SPINE_ELECTRON_API_UNAVAILABLE";
+  error.cause = unavailable.at(-1);
+  throw error;
+}
+
 function loadRendererPayload(options = {}) {
   const rendererPath = options.rendererPath ?? process.env[RENDERER_PATH_ENV];
   const expectedSha256 = String(
@@ -299,7 +358,7 @@ function loadRendererPayload(options = {}) {
 function installRendererRecovery(options = {}) {
   const payload = options.payload ?? loadRendererPayload(options);
   if (payload == null) return null;
-  const electron = options.electron ?? require("electron");
+  const electron = options.electron ?? loadElectronMainApi(options.requireFn);
   const app = electron?.app;
   const webContents = electron?.webContents;
   if (!app?.on || !app?.whenReady || !webContents?.getAllWebContents) {
@@ -384,14 +443,23 @@ function installMainProcessHook(options = {}) {
   const deadlineMs = options.deadlineMs ?? DEFAULT_HOOK_DEADLINE_MS;
 
   let rendererRecovery = null;
+  let rendererRecoveryDeferred = false;
   try {
     rendererRecovery = installRendererRecovery(options.rendererRecoveryOptions);
   } catch (error) {
-    writeHookStatus(statusPath, "incompatible", {
-      reason: String(error?.message ?? error),
-      rendererRecovery: false,
-    });
-    throw error;
+    if (error?.code === "SPINE_ELECTRON_API_UNAVAILABLE") {
+      // Current Electron builds can execute NODE_OPTIONS preloads before their
+      // bootstrap registers electron/main in Module._resolveFilename. The
+      // app bundle is still patched synchronously below; install recovery on
+      // the first event-loop turn, after Electron's own bootstrap completes.
+      rendererRecoveryDeferred = true;
+    } else {
+      writeHookStatus(statusPath, "incompatible", {
+        reason: String(error?.message ?? error),
+        rendererRecovery: false,
+      });
+      throw error;
+    }
   }
 
   const originalExtension = Module._extensions[".js"];
@@ -400,6 +468,7 @@ function installMainProcessHook(options = {}) {
   let mainPatched = false;
   let versionPatched = false;
   let deadline = null;
+  let failed = false;
 
   const restoreExtension = () => {
     if (Module._extensions[".js"] === spineCodexMainExtension) {
@@ -407,16 +476,21 @@ function installMainProcessHook(options = {}) {
     }
   };
   const incompatible = (reason) => {
+    if (failed) return;
+    failed = true;
     restoreExtension();
     if (deadline != null) clearTimeout(deadline);
     writeHookStatus(statusPath, "incompatible", {
       reason: String(reason?.message ?? reason),
       mainPatched,
       versionPatched,
+      rendererRecovery: rendererRecovery != null,
     });
   };
   const completeIfReady = () => {
-    if (!mainPatched || !versionPatched) return false;
+    if (failed || !mainPatched || !versionPatched || rendererRecovery == null) {
+      return false;
+    }
     restoreExtension();
     if (deadline != null) clearTimeout(deadline);
     writeHookStatus(statusPath, "ready", {
@@ -493,11 +567,38 @@ function installMainProcessHook(options = {}) {
   }
 
   Module._extensions[".js"] = spineCodexMainExtension;
-  writeHookStatus(statusPath, "installed", { minimum });
+  writeHookStatus(statusPath, "installed", {
+    minimum,
+    rendererRecovery: rendererRecovery != null,
+    rendererRecoveryDeferred,
+  });
+  if (rendererRecoveryDeferred) {
+    setImmediate(() => {
+      if (failed || rendererRecovery != null) return;
+      try {
+        rendererRecovery = installRendererRecovery(
+          options.rendererRecoveryOptions,
+        );
+        if (rendererRecovery == null) {
+          throw new Error("SpineCodex renderer recovery payload is unavailable");
+        }
+        if (!completeIfReady()) {
+          writeHookStatus(statusPath, "renderer-recovery-installed", {
+            minimum,
+            mainPatched,
+            versionPatched,
+            rendererRecovery: true,
+          });
+        }
+      } catch (error) {
+        incompatible(error);
+      }
+    });
+  }
   deadline = setTimeout(() => {
-    if (!mainPatched || !versionPatched) {
+    if (!mainPatched || !versionPatched || rendererRecovery == null) {
       incompatible(
-        "SpineCodex SSH hook did not observe compatible Codex bundles before its deadline",
+        "SpineCodex hook did not observe compatible Codex bundles and Electron APIs before its deadline",
       );
     }
   }, deadlineMs);
@@ -518,6 +619,7 @@ module.exports = {
   writeHookStatus,
   isCodexMainSurfaceUrl,
   loadRendererPayload,
+  loadElectronMainApi,
   installRendererRecovery,
   installMainProcessHook,
 };

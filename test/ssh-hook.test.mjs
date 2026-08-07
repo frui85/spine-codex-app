@@ -38,6 +38,40 @@ assert.equal(hook.versionAtLeast("0.2.3", "0.2.2"), true);
 assert.equal(hook.versionAtLeast("1.0.0", "0.2.2"), true);
 assert.equal(hook.versionAtLeast("0.2.1", "0.2.2"), false);
 
+const modernElectronApi = { app: { modern: true } };
+const legacyElectronApi = { app: { legacy: true } };
+const modernRequests = [];
+assert.equal(
+  hook.loadElectronMainApi((specifier) => {
+    modernRequests.push(specifier);
+    return modernElectronApi;
+  }),
+  modernElectronApi,
+);
+assert.deepEqual(modernRequests, ["electron/main"]);
+const legacyRequests = [];
+assert.equal(
+  hook.loadElectronMainApi((specifier) => {
+    legacyRequests.push(specifier);
+    if (specifier === "electron/main") {
+      const error = new Error("Cannot find module 'electron/main'");
+      error.code = "MODULE_NOT_FOUND";
+      throw error;
+    }
+    return legacyElectronApi;
+  }),
+  legacyElectronApi,
+);
+assert.deepEqual(legacyRequests, ["electron/main", "electron"]);
+assert.throws(
+  () => hook.loadElectronMainApi(() => {
+    const error = new Error("Cannot find module 'unexpected-child'");
+    error.code = "MODULE_NOT_FOUND";
+    throw error;
+  }),
+  /unexpected-child/,
+);
+
 function versionFixture({ check, argument, zero, compare, minimum, exportName }) {
   return (
     "var exports={};" +
@@ -118,6 +152,15 @@ const remoteBootstrapSource =
   "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
   "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
   "` || true) && nohup `,`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
+const forwardedAgentBootstrapSource =
+  "function quote(e){return e}" +
+  "let logPath=\"/tmp/app-server.log\"," +
+  "agentSocket=\"/tmp/forwarded-ssh-agent.sock\"," +
+  "prepareAgent=\"prepare-forwarded-agent\";" +
+  "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
+  "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
+  "` || true) && `,prepareAgent,` && SSH_AUTH_SOCK=`,agentSocket,` nohup `," +
+  "`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
 const patchedRemoteBootstrap = hook.patchRemoteBootstrapCleanupSource(
   remoteBootstrapSource,
 );
@@ -158,6 +201,25 @@ assert.match(
 );
 assert.doesNotMatch(patchedRemoteBootstrap, /\[a\]pp-server --listen/);
 assert.doesNotMatch(patchedRemoteBootstrap, /pkill -9 -U/);
+const patchedForwardedAgentBootstrap =
+  hook.patchRemoteBootstrapCleanupSource(forwardedAgentBootstrapSource);
+const renderedForwardedAgentBootstrap = new Function(
+  "cli",
+  `${patchedForwardedAgentBootstrap}; return command;`,
+)("spine-codex");
+assert.match(
+  renderedForwardedAgentBootstrap,
+  /prepare-forwarded-agent && SSH_AUTH_SOCK=\/tmp\/forwarded-ssh-agent\.sock nohup sh -c/,
+);
+assert.match(
+  renderedForwardedAgentBootstrap,
+  /nohup sh -c 'exec "\$@" <\/dev\/null' sh spine-codex/,
+);
+assert.doesNotMatch(renderedForwardedAgentBootstrap, /pkill -9 -U/);
+assert.equal(
+  spawnSync("/bin/sh", ["-n", "-c", renderedForwardedAgentBootstrap]).status,
+  0,
+);
 assert.throws(
   () => hook.patchRemoteBootstrapCleanupSource("const unrelated = true;"),
   /unsupported structure/,
@@ -290,6 +352,11 @@ const fixtureVersion = join(fixtureDirectory, "src-version.js");
 const fixtureStatus = join(fixtureDirectory, "status.json");
 const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 const previousMinimum = process.env.SPINE_CODEX_MIN_VERSION;
+let deferredElectronReady = false;
+const deferredElectron = {
+  app: Object.assign(new EventEmitter(), { whenReady: async () => {} }),
+  webContents: { getAllWebContents: () => [] },
+};
 try {
   await writeFile(
     fixtureVersion,
@@ -325,12 +392,15 @@ try {
         source: "globalThis.__spineRecoveryFixture = true;",
         sha256: rendererSha256,
       }),
-      electron: {
-        app: Object.assign(new EventEmitter(), { whenReady: async () => {} }),
-        webContents: { getAllWebContents: () => [] },
+      requireFn: (specifier) => {
+        if (deferredElectronReady) return deferredElectron;
+        const error = new Error(`Cannot find module '${specifier}'`);
+        error.code = "MODULE_NOT_FOUND";
+        throw error;
       },
     },
   }), true);
+  deferredElectronReady = true;
   const earlyVersion = require(fixtureBridge);
   assert.equal(earlyVersion.check("0.2.2"), true);
   await new Promise((resolve) => setImmediate(resolve));

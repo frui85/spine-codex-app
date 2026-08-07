@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Defers Electron renderer-recovery setup when a current Codex build runs Node preloads before registering `electron/main`, while keeping the SSH bundle patch synchronous and preserving legacy `electron` compatibility.
+- Preserves Codex Desktop's forwarded SSH-agent setup while adapting the remote SpineCodex bootstrap to the nested cleanup structure introduced in build `26.803.41515`.
+
 ## v0.2.2.1 — 2026-08-07
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
