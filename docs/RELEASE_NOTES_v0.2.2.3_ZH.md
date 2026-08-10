@@ -135,12 +135,12 @@ Renderer 不再按固定时间窗拦截应用目录通知，避免快速发生�
 
 ## 七、发布信息
 
-- 修复提交：[`31f5126`](https://github.com/frui85/spine-codex-app/commit/31f5126470a399778f556e3720b5f26b72e645a2)
-- Fork Release：[`v0.2.2.3`](https://github.com/frui85/spine-codex-app/releases/tag/v0.2.2.3)
-- 上游 PR：[`izumedonabe/spine-codex-app#3`](https://github.com/izumedonabe/spine-codex-app/pull/3)
+- 正式版本：[`v0.2.2.3`](https://github.com/izumedonabe/SpineCodexApp/releases/tag/v0.2.2.3)
+- 修复 PR：[`izumedonabe/SpineCodexApp#3`](https://github.com/izumedonabe/SpineCodexApp/pull/3)
+- 合并提交：[`c23fc1c`](https://github.com/izumedonabe/SpineCodexApp/commit/c23fc1c7e0d0d30325f10c1e0e52ff1153d1fb30)
 
-当前 Fork Release 已发布且不是 draft/prerelease，arm64、x64 DMG 及对应 SHA-256
-文件均已上传。上游正式 Release 仍需要原仓库维护者合并 PR 后发布。
+正式 Release 由标签工作流从合并后的源码构建。arm64、x64 DMG 及对应
+SHA-256 文件通过校验后一次性发布，不包含 Windows 资产。
 
 ## 八、兼容性边界
 

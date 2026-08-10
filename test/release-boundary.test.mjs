@@ -53,6 +53,18 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.equal(metadata.scripts["build:windows"], "node scripts/build-windows-release.mjs --arch x64");
   assert.match(windowsBuilder, /NODE_VERSION = "v22\.23\.2"/);
   assert.match(windowsBuilder, /metadata\.spineAppVersion/);
+  assert.match(
+    windowsBuilder,
+    /MIN_SPINE_CODEX_VERSION = metadata\.spineCodexVersion/,
+  );
+  assert.match(
+    windowsBuilder,
+    /SpineCodex \$\{MIN_SPINE_CODEX_VERSION\} or newer installed separately/,
+  );
+  assert.doesNotMatch(
+    windowsBuilder,
+    /SpineCodex \$\{VERSION\} or newer installed separately/,
+  );
   assert.match(windowsBuilder, /node-\$\{NODE_VERSION\}-win-\$\{ARCHITECTURE\}/);
   assert.match(windowsBuilder, /x86_64-w64-mingw32-gcc/);
   assert.match(windowsBuilder, /SpineCodex App\.exe/);

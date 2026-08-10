@@ -1,6 +1,6 @@
 # SpineCodex App v0.2.2.3
 
-[中文修复说明](RELEASE_NOTES_v0.2.2.3_ZH.md)
+[中文修复说明](https://github.com/izumedonabe/SpineCodexApp/blob/v0.2.2.3/docs/RELEASE_NOTES_v0.2.2.3_ZH.md)
 
 This wrapper revision continues to require an externally installed SpineCodex
 0.2.2 or newer. SpineCodex and Codex Desktop are not bundled.
