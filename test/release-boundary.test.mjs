@@ -28,13 +28,13 @@ const mainInspector = await readFile(
   "utf8",
 );
 
-test("wrapper revision 0.2.2.1 tracks SpineCodex 0.2.2", () => {
+test("wrapper revision 0.2.2.2 tracks SpineCodex 0.2.2", () => {
   assert.equal(metadata.version, "0.2.2");
-  assert.equal(metadata.spineAppVersion, "0.2.2.1");
+  assert.equal(metadata.spineAppVersion, "0.2.2.2");
   assert.equal(metadata.spineCodexVersion, "0.2.2");
-  assert.match(launcher, /APP_VERSION = "0\.2\.2\.1"/);
+  assert.match(launcher, /APP_VERSION = "0\.2\.2\.2"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(renderer, /VERSION = "0\.2\.2\.1"/);
+  assert.match(renderer, /VERSION = "0\.2\.2\.2"/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
