@@ -97,12 +97,11 @@ const nodeOptions = [mainHookOption, process.env.NODE_OPTIONS].filter(Boolean).j
 const appEnvironment = {
   ...process.env,
   PATH: appSearchPath,
-  // One portable command name is the invariant on both sides of SSH. Locally,
-  // PATH starts with LOCAL_CLI_DIR so this resolves to our private shim;
-  // remotely, Codex's login shell resolves the host's installed SpineCodex.
-  // A Codex App update can no longer make the remote selector fall back from
-  // an absolute local-only path to the official `codex` command.
+  // Remote SSH must receive a portable command name. The verified Electron
+  // hook independently points only the local selector at the private shim, so
+  // a login-shell PATH refresh cannot bypass the output filter.
   CODEX_CLI_PATH: REMOTE_CLI_NAME,
+  SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM,
   SPINE_CODEX_BINARY: spineCodex,
   SPINE_CODEX_SHIM_NODE: process.execPath,
   SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
@@ -826,7 +825,11 @@ async function launchCodexApp({
       "--env",
       `CODEX_CLI_PATH=${appEnvironment.CODEX_CLI_PATH}`,
       "--env",
+      `SPINE_CODEX_LOCAL_CLI_PATH=${appEnvironment.SPINE_CODEX_LOCAL_CLI_PATH}`,
+      "--env",
       `SPINE_CODEX_BINARY=${appEnvironment.SPINE_CODEX_BINARY}`,
+      "--env",
+      `SPINE_CODEX_SHIM_NODE=${appEnvironment.SPINE_CODEX_SHIM_NODE}`,
       "--env",
       `SPINE_CODEX_MIN_VERSION=${appEnvironment.SPINE_CODEX_MIN_VERSION}`,
       "--env",

@@ -82,6 +82,17 @@ test("no-argument launch does not create a root workspace task", () => {
 });
 
 test("renderer injection survives Electron renderer replacement", () => {
+  assert.match(launcher, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
+  assert.match(
+    launcher,
+    /`SPINE_CODEX_LOCAL_CLI_PATH=\$\{appEnvironment\.SPINE_CODEX_LOCAL_CLI_PATH\}`/,
+  );
+  assert.match(
+    launcher,
+    /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
+  );
+  assert.match(mainHook, /SPINE_CODEX_LOCAL_CLI_PATH/);
+  assert.match(mainHook, /patchLocalCliSelectorSource/);
   assert.match(launcher, /SPINE_CODEX_RENDERER_PATH:/);
   assert.match(launcher, /SPINE_CODEX_RENDERER_SHA256:/);
   assert.match(launcher, /rendererRecovery !== true/);

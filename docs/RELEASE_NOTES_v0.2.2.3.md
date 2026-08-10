@@ -12,6 +12,10 @@ This wrapper revision continues to require an externally installed SpineCodex
   allowing the same state again after a quiet window. This stops alternating
   snapshots from repeating the 1,000 + 1,000 + 612 item pagination cycle
   without relying on renderer listener order.
+- Gives Desktop's local CLI selector a dedicated absolute path to the packaged
+  private shim. This keeps the output filter in the process chain even after
+  Desktop reloads the login-shell environment and replaces `PATH`. Remote SSH
+  continues to resolve the portable `spine-codex` command on each host.
 - Restricts the full Spine View injection to the primary Codex page instead of
   also attaching it to the `avatar-overlay` renderer.
 - Keeps a renderer burst guard and diagnostic counter as a second layer of

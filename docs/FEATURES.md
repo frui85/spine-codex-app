@@ -62,13 +62,14 @@ app-server proxying, and cleanup. Nothing is written to `~/.ssh/config`, and no
 local absolute path is sent to the server: the remote login shell resolves its
 own `spine-codex` from `PATH`.
 
-`CODEX_CLI_PATH` itself is the portable command name `spine-codex`. Locally,
-the launcher prepends its private `bin` directory to `PATH`, so the command
-resolves deterministically to the wrapper shim and then to the discovered
-SpineCodex binary. Remotely, the same unmodified Codex selector sends that name
-through SSH. This remains safe if an App update changes the selector's bundled
-source because there is no absolute path for it to reject and no `codex`
-fallback to choose.
+`CODEX_CLI_PATH` itself remains the portable command name `spine-codex` for
+remote SSH. Locally, the verified Electron hook gives the Desktop's local CLI
+selector a separate `SPINE_CODEX_LOCAL_CLI_PATH` absolute path to the wrapper's
+private shim. This remains deterministic even after Desktop refreshes `PATH`
+from a login shell. The shim then invokes the discovered SpineCodex binary
+through the packaged Node runtime, keeping the app-server output filter in the
+local process chain. The remote selector is unchanged and never receives the
+local absolute path.
 
 Install SpineCodex `0.2.2` or newer on every remote host and make sure this
 works in a non-interactive login shell:
@@ -82,6 +83,11 @@ Electron-main preload extends that compatibility check to SpineCodex `0.2.2`
 or newer while preserving the App's original acceptance rules. It identifies
 the `src-*` version bundle by the stable unsupported-version error prefix and
 comparator structure—not by generated export names such as `wc` or `mc`.
+
+The same preload identifies the local CLI selector by its stable missing-binary
+error and selector structure. It patches only the local selector in the shared
+`src-*` bundle; unknown structures fail closed before Desktop startup is
+reported ready.
 
 The preload also identifies the SSH bootstrap by its fixed
 `desktop-ssh-websocket-v0.sock` marker and replaces only that bootstrap's

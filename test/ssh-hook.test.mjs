@@ -72,6 +72,11 @@ assert.throws(
   /unexpected-child/,
 );
 
+const localSelectorSource =
+  "const localCliError=`Unable to locate the Codex CLI binary. Set CODEX_CLI_PATH or ensure the Electron resources include bin/codex.`;" +
+  "function BB(){let e=process.env.CODEX_CLI_PATH;if(e==null)return null;" +
+  "let t=e.trim();return t.length===0?null:t}";
+
 function versionFixture({ check, argument, zero, compare, minimum, exportName }) {
   return (
     "var exports={};" +
@@ -107,9 +112,9 @@ for (const fixture of [
     exportName: "mc",
   },
 ]) {
-  const source = versionFixture(fixture);
-  const patched = hook.patchVersionCompatibilitySource(source, "0.2.2");
-  const check = Function(`${patched};return ${fixture.check}`)();
+  const source = localSelectorSource + versionFixture(fixture);
+  const patchedVersion = hook.patchVersionCompatibilitySource(source, "0.2.2");
+  const check = Function(`${patchedVersion};return ${fixture.check}`)();
   assert.equal(check("0.0.0"), true);
   assert.equal(check("0.141.0"), true);
   assert.equal(check("0.2.2"), true);
@@ -123,7 +128,7 @@ for (const fixture of [
       source,
       "0.2.2",
     ),
-    patched,
+    hook.patchLocalCliSelectorSource(patchedVersion),
   );
 }
 assert.equal(
@@ -139,6 +144,31 @@ assert.throws(
 );
 assert.doesNotMatch(hookSource, /value\.wc|value\.Cc|value\.Sc/);
 assert.match(hookSource, /isMainThread/);
+
+const patchedLocalSelector = hook.patchLocalCliSelectorSource(
+  localSelectorSource,
+);
+const selectLocalCli = new Function(
+  "process",
+  `${patchedLocalSelector};return BB;`,
+);
+assert.equal(
+  selectLocalCli({
+    env: {
+      CODEX_CLI_PATH: "spine-codex",
+      SPINE_CODEX_LOCAL_CLI_PATH: "/private/wrapper/bin/spine-codex",
+    },
+  })(),
+  "/private/wrapper/bin/spine-codex",
+);
+assert.equal(
+  selectLocalCli({ env: { CODEX_CLI_PATH: "spine-codex" } })(),
+  "spine-codex",
+);
+assert.throws(
+  () => hook.patchLocalCliSelectorSource("const unrelated = true;"),
+  /marker was not found/,
+);
 
 const remoteSelectorSource =
   "function Pae(){let e=process.env.CODEX_CLI_PATH;if(e==null)return null;" +
@@ -257,6 +287,7 @@ for (const filename of ["main-dcXtv3U5.js", "main--A7m_SpR.js"]) {
 assert.match(wrapperSource, /REMOTE_CLI_NAME = "spine-codex"/);
 assert.match(wrapperSource, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
 assert.match(wrapperSource, /CODEX_CLI_PATH: REMOTE_CLI_NAME/);
+assert.match(wrapperSource, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
 assert.match(wrapperSource, /PATH: appSearchPath/);
 assert.match(wrapperSource, /NODE_OPTIONS: nodeOptions/);
 assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
@@ -264,6 +295,14 @@ assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_PATH:/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_SHA256:/);
 assert.match(wrapperSource, /SPINE_CODEX_SHIM_NODE: process\.execPath/);
+assert.match(
+  wrapperSource,
+  /`SPINE_CODEX_LOCAL_CLI_PATH=\$\{appEnvironment\.SPINE_CODEX_LOCAL_CLI_PATH\}`/,
+);
+assert.match(
+  wrapperSource,
+  /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
+);
 assert.match(wrapperSource, /rendererRecovery !== true/);
 assert.match(
   wrapperSource,
@@ -378,6 +417,7 @@ const fixtureBridge = join(fixtureDirectory, "chunk-bridge.js");
 const fixtureVersion = join(fixtureDirectory, "src-version.js");
 const fixtureStatus = join(fixtureDirectory, "status.json");
 const previousCodexCliPath = process.env.CODEX_CLI_PATH;
+const previousLocalCliPath = process.env.SPINE_CODEX_LOCAL_CLI_PATH;
 const previousMinimum = process.env.SPINE_CODEX_MIN_VERSION;
 let deferredElectronReady = false;
 const deferredElectron = {
@@ -387,11 +427,12 @@ const deferredElectron = {
 try {
   await writeFile(
     fixtureVersion,
-    "let official=`0.141.0`,prefix=`codex-app-server-version-unsupported:`,zero=`0.0.0`;" +
+    localSelectorSource +
+      "let official=`0.141.0`,prefix=`codex-app-server-version-unsupported:`,zero=`0.0.0`;" +
       "function compare(e,t){let a=e.split(`.`).map(Number),b=t.split(`.`).map(Number);" +
       "for(let i=0;i<3;i+=1){if(a[i]!==b[i])return a[i]-b[i]}return 0}" +
       "function check(e){return e===zero||compare(e,official)>=0}" +
-      "module.exports={check};",
+      "module.exports={check,localCli:BB()};",
     "utf8",
   );
   await writeFile(
@@ -408,6 +449,8 @@ try {
     "utf8",
   );
   process.env.CODEX_CLI_PATH = "spine-codex";
+  process.env.SPINE_CODEX_LOCAL_CLI_PATH =
+    "/private/wrapper/bin/spine-codex";
   process.env.SPINE_CODEX_MIN_VERSION = "0.2.2";
   assert.equal(hook.installMainProcessHook({
     force: true,
@@ -430,6 +473,10 @@ try {
   deferredElectronReady = true;
   const earlyVersion = require(fixtureBridge);
   assert.equal(earlyVersion.check("0.2.2"), true);
+  assert.equal(
+    earlyVersion.localCli,
+    "/private/wrapper/bin/spine-codex",
+  );
   await new Promise((resolve) => setImmediate(resolve));
   const deferredMain = require(fixtureMain);
   assert.equal(deferredMain.cli, "spine-codex");
@@ -444,6 +491,11 @@ try {
 } finally {
   if (previousCodexCliPath == null) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  if (previousLocalCliPath == null) {
+    delete process.env.SPINE_CODEX_LOCAL_CLI_PATH;
+  } else {
+    process.env.SPINE_CODEX_LOCAL_CLI_PATH = previousLocalCliPath;
+  }
   if (previousMinimum == null) delete process.env.SPINE_CODEX_MIN_VERSION;
   else process.env.SPINE_CODEX_MIN_VERSION = previousMinimum;
   await rm(fixtureDirectory, { recursive: true, force: true });
