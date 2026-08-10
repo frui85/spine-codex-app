@@ -36,8 +36,9 @@ ChatGPT
    └─ SpineCodex vendor codex
 ```
 
-因此，本应位于私有 shim 中的 app-server 输出过滤器被绕过。Renderer
-虽然有突发消息保护，但此时大消息已经完成传输和反序列化，无法从源头消除 CPU、内存和温度压力。
+因此，本应位于私有 shim 中的 app-server 输出过滤器被绕过。如果只在
+Renderer 拦截，此时大消息已经完成传输和反序列化，无法从源头消除
+CPU、内存和温度压力。
 
 ## 三、修复方案
 
@@ -80,12 +81,11 @@ CODEX_CLI_PATH=spine-codex
 私有 shim 中的 app-server 输出过滤器会：
 
 - 对应用目录快照进行规范化；
-- 抑制短时间内重复出现的语义相同快照；
-- 正常转发真实变化后的目录；
-- 在静默窗口结束后允许相同状态再次发送；
+- 只抑制连续重复的语义相同快照；
+- 正常转发每一次真实状态变化，包括 `A → B → A`；
 - 对畸形消息和无关消息保持透传。
 
-Renderer 中的突发消息保护和计数器继续保留，作为第二层防护。
+Renderer 不再按固定时间窗拦截应用目录通知，避免快速发生的真实变化被隐藏。
 
 ## 四、验证结果
 
@@ -94,19 +94,13 @@ Renderer 中的突发消息保护和计数器继续保留，作为第二层防�
 | 完整检查 | `npm run check`，21/21 通过 |
 | 本地进程链 | 已确认经过安装包内 Node.js、私有 shim、全局 SpineCodex 和 vendor codex |
 | 应用目录消息 | 两个连续 10 秒窗口内，`app/list/updated = 0` |
-| Renderer 防护计数 | `blockedAppListUpdates = 1`，观察期间不再增长 |
+| 连续重复回归 | 连续 250 个相同快照只转发第一个 |
+| 状态切换回归 | `A → B → A` 三个状态均正常转发 |
 | 总消息速率 | 约 2.1-2.4 条/秒 |
 | 系统 CPU | 约 74%-80% idle，无此前持续多核饱和 |
 | Renderer RSS | 约 0.5 GB，未出现此前持续增长到 3.5 GB 的情况 |
 | 热状态 | `pmset -g therm` 无 thermal/performance warning |
-| DMG 完整性 | arm64、x64 均通过 SHA-256、`hdiutil verify` 和 ad-hoc codesign 校验 |
-
-DMG SHA-256：
-
-```text
-arm64  85ff2f011593528f8bf0e76c4867c2f3e90f127781dfd942976ccbcc0773202f
-x64    a5a7aea32708adc07aa731323bad782351e71277a68d3a99324f047cd3727b4b
-```
+| 发布资产 | 标签工作流将从合并后的源码重新构建，并执行 SHA-256、`hdiutil verify` 和 ad-hoc codesign 校验 |
 
 ## 五、安装与核验
 
