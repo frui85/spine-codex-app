@@ -108,7 +108,7 @@ vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
 assert.equal(api.version, "0.2.2.1");
-assert.equal(api.revision, 4);
+assert.equal(api.revision, 7);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -140,6 +140,14 @@ assert.match(source, /grid-template-rows: 0fr; opacity: 0; margin-top: 0/);
 assert.match(source, /\.row:active \{ scale: \.98; \}/);
 assert.match(source, /prefers-reduced-motion: reduce/);
 assert.match(source, /function summaryPanels/);
+assert.match(source, /function pinnedSummarySurfaces/);
+assert.match(source, /function containsStructuredSummarySections/);
+assert.match(source, /function geometricSummarySurfaces/);
+assert.match(source, /function isGeometricSummarySurface/);
+assert.match(source, /document\.elementsFromPoint/);
+assert.match(source, /rectIntersectionRatio/);
+assert.match(source, /marker\.parentElement\?\.children/);
+assert.match(source, /surface\.contains\(element\)/);
 assert.match(source, /function summaryContainerMetrics/);
 assert.match(source, /connectSummarySurfaceObserver/);
 assert.match(source, /document\.elementFromPoint/);
@@ -981,7 +989,7 @@ api.destroy();
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
 assert.equal(restoredApi.version, "0.2.2.1");
-assert.equal(restoredApi.revision, 4);
+assert.equal(restoredApi.revision, 7);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&

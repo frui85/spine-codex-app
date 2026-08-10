@@ -4,6 +4,8 @@
 
 - Defers Electron renderer-recovery setup when a current Codex build runs Node preloads before registering `electron/main`, while keeping the SSH bundle patch synchronous and preserving legacy `electron` compatibility.
 - Preserves Codex Desktop's forwarded SSH-agent setup while adapting the remote SpineCodex bootstrap to the nested cleanup structure introduced in build `26.803.41515`.
+- Makes summary mounting self-healing across legacy markers, sibling surfaces, and geometry-compatible replacements without relying on translated labels or generated CSS classes.
+- Reloads the current on-disk renderer source whenever Electron rebuilds the main surface, preventing a long-running main process from reviving an obsolete renderer revision after a crash.
 
 ## v0.2.2.1 — 2026-08-07
 

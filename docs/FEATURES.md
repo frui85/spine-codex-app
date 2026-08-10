@@ -24,11 +24,13 @@ Quit Codex Desktop completely before launching. The wrapper uses a random
 loopback-only CDP port, validates the renderer WebSocket, registers the
 renderer for the initial target, injects the section, and then exits. The
 verified Electron main hook independently keeps narrow `web-contents-created`
-and `did-finish-load` listeners. It SHA-256 verifies `spine-view.js` and
-executes it only in the exact `app://-/index.html` main surface, so a renderer
-crash, reload, or BrowserWindow replacement restores Spine View without a
-launcher watchdog. A full App process restart still needs to be launched
-through the wrapper again.
+and `did-finish-load` listeners. It SHA-256 verifies `spine-view.js` and then
+re-reads the same absolute resource path for every completed main-surface
+load. It executes the current source only in the exact `app://-/index.html`
+surface, so a renderer crash, reload, or BrowserWindow replacement cannot
+revive an obsolete in-memory revision and does not require a launcher
+watchdog. A full App process restart still needs to be launched through the
+wrapper again.
 
 On Windows, the portable package resolves the stable
 `OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0` package family and its AppX manifest to
@@ -131,12 +133,13 @@ Spine Tree is the first section in Codex's summary card. At narrower window
 widths it follows Codex's own responsive behavior: click the native **Toggle
 summary** button in the top-right toolbar to show the card. When the workspace
 sidebar occupies the right edge, Codex changes that card from a pinned panel to
-a floating Radix popover. The wrapper recognizes both native surfaces: the
-pinned `thread-summary-panel`, and an open `popover-content` dialog containing
-Codex's structured `thread-summary-panel-section-actions`. It moves the same
-Spine Tree instance between them before paint. It does not duplicate the tree,
-depend on translated button labels, or assume that a 300 px floating card must
-begin in the right half of a narrow window. A top-toolbar layout click arms a
+a floating Radix popover. The wrapper recognizes both native surfaces. It
+prefers Codex's structured summary attributes, supports both legacy
+marker-owned content and newer marker siblings, and falls back to a bounded
+overlap/section-layout probe around the native summary marker. It moves the
+same Spine Tree instance between them before paint. It does not duplicate the
+tree, depend on translated button labels or generated class names, or assume
+that a 300 px floating card must begin in the right half of a narrow window. A top-toolbar layout click arms a
 bounded three-second observer only while Codex creates or transitions that
 floating surface; it disconnects as soon as the tree mounts and is never a
 permanent whole-page observer. Click the Spine Tree heading to collapse or
@@ -293,8 +296,9 @@ underlying snapshot. Detail closes only when the node truly disappears, the
 conversation changes, or the user closes it, preventing a node from one
 conversation being shown beside another.
 
-The mount follows Codex's own `thread-summary-panel` marker, so it also works
-when the card contains only Environment information. Sidebar sections and
+The mount uses Codex's summary marker as a geometric boundary as well as a
+structured anchor, so it also works when the marker is an empty layout obstacle
+or the card contains only Environment information. Sidebar sections and
 subagent panes are excluded without depending on translated section names.
 
 ## Spine features

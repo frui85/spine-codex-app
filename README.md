@@ -156,12 +156,15 @@ SpineCodex App
 
 The launcher does not modify `app.asar`, replace the Codex React tree, or patch the application on disk. Renderer integration uses a Shadow DOM surface and narrow structural hooks. Both local and remote startup use the portable command name `spine-codex`: the local `PATH` resolves the wrapper's private shim, while each SSH login shell resolves its own installation. Remote bootstrap is serialized and idempotent: it reuses a healthy SpineCodex server, replaces only a same-user stale or official-Codex socket owner, and does not start the proxy until the Unix socket is demonstrably ready. A one-time launcher/main-process readiness handshake verifies the version and bootstrap structures before startup is reported as successful; unknown bundles fail closed.
 
-The verified main hook also keeps two narrow Electron lifecycle listeners. On a
-main-window `did-finish-load`—including a reload after an Electron renderer
-crash—it SHA-256 verifies the packaged `spine-view.js` and executes it only in
-the exact `app://-/index.html` surface. There is no timer, polling watchdog, or
-extra resident process. The renderer's own revision guard makes the initial
-CDP injection and any recovery injection idempotent.
+The verified main hook also keeps two narrow Electron lifecycle listeners. It
+SHA-256 verifies the packaged `spine-view.js` at startup. On each main-window
+`did-finish-load`—including a reload after an Electron renderer crash—it reads
+the same absolute resource path again and executes the current renderer only in
+the exact `app://-/index.html` surface. This prevents a long-running main
+process from reviving an older in-memory renderer after the installed wrapper
+has been updated. There is no timer, polling watchdog, or extra resident
+process. The renderer's own revision guard makes the initial CDP injection and
+any recovery injection idempotent.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled runtime notices.
 

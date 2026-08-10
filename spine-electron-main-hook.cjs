@@ -355,8 +355,28 @@ function loadRendererPayload(options = {}) {
   });
 }
 
+function reloadRendererPayload(payload) {
+  if (!payload?.path || !path.isAbsolute(payload.path)) {
+    throw new Error("SpineCodex renderer recovery path is unavailable");
+  }
+  const source = fs.readFileSync(payload.path, "utf8");
+  if (
+    !source.includes('const GLOBAL_KEY = "__spineCodexViewV1"') ||
+    !source.includes("RENDERER_REVISION")
+  ) {
+    throw new Error("SpineCodex renderer source has an unsupported structure");
+  }
+  const sha256 = crypto.createHash("sha256").update(source).digest("hex");
+  if (sha256 === payload.sha256) return payload;
+  return Object.freeze({
+    path: payload.path,
+    source,
+    sha256,
+  });
+}
+
 function installRendererRecovery(options = {}) {
-  const payload = options.payload ?? loadRendererPayload(options);
+  let payload = options.payload ?? loadRendererPayload(options);
   if (payload == null) return null;
   const electron = options.electron ?? loadElectronMainApi(options.requireFn);
   const app = electron?.app;
@@ -382,7 +402,14 @@ function installRendererRecovery(options = {}) {
     const active = inFlight.get(contents);
     if (active) return active;
     const pending = Promise.resolve()
-      .then(() => contents.executeJavaScript(payload.source, false))
+      // A long-running Electron main process can outlive several renderer
+      // revisions. Re-read the already-validated absolute resource path at
+      // each main-surface load so a renderer crash never revives the source
+      // that happened to be in memory when the App first started.
+      .then(() => {
+        payload = (options.reloadPayload ?? reloadRendererPayload)(payload);
+        return contents.executeJavaScript(payload.source, false);
+      })
       .then(() => true)
       .catch((error) => {
         console.error(
@@ -419,7 +446,7 @@ function installRendererRecovery(options = {}) {
   });
 
   return Object.freeze({
-    payload,
+    get payload() { return payload; },
     attach,
     inject,
     dispose() {
@@ -619,6 +646,7 @@ module.exports = {
   writeHookStatus,
   isCodexMainSurfaceUrl,
   loadRendererPayload,
+  reloadRendererPayload,
   loadElectronMainApi,
   installRendererRecovery,
   installMainProcessHook,

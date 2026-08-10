@@ -317,11 +317,20 @@ class FakeWebContents extends EventEmitter {
 const fakeApp = new EventEmitter();
 fakeApp.whenReady = async () => {};
 const existingContents = [];
+const recoveryDirectory = await mkdtemp(join(tmpdir(), "spine-renderer-recovery-test-"));
+const recoveryRenderer = join(recoveryDirectory, "spine-view.js");
+const recoverySourceOne =
+  '(function(){const GLOBAL_KEY = "__spineCodexViewV1";' +
+  "const RENDERER_REVISION=1;globalThis[GLOBAL_KEY]={revision:RENDERER_REVISION};})();";
+const recoverySourceTwo = recoverySourceOne.replace(
+  "RENDERER_REVISION=1",
+  "RENDERER_REVISION=2",
+);
+await writeFile(recoveryRenderer, recoverySourceOne);
 const recovery = hook.installRendererRecovery({
-  payload: Object.freeze({
-    path: fileURLToPath(rendererPath),
-    source: "globalThis.__spineRecoveryProbe = true;",
-    sha256: rendererSha256,
+  payload: hook.loadRendererPayload({
+    rendererPath: recoveryRenderer,
+    rendererSha256: createHash("sha256").update(recoverySourceOne).digest("hex"),
   }),
   electron: {
     app: fakeApp,
@@ -334,10 +343,17 @@ mainSurface.emit("did-finish-load");
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(mainSurface.executions.length, 1);
 assert.equal(mainSurface.executions[0].userGesture, false);
+assert.equal(mainSurface.executions[0].source, recoverySourceOne);
 // A renderer crash/reload uses the same webContents and emits another load.
+await writeFile(recoveryRenderer, recoverySourceTwo);
 mainSurface.emit("did-finish-load");
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(mainSurface.executions.length, 2);
+assert.equal(mainSurface.executions[1].source, recoverySourceTwo);
+assert.equal(
+  recovery.payload.sha256,
+  createHash("sha256").update(recoverySourceTwo).digest("hex"),
+);
 const devtoolsSurface = new FakeWebContents("devtools://devtools/bundled/", "window");
 fakeApp.emit("web-contents-created", {}, devtoolsSurface);
 devtoolsSurface.emit("did-finish-load");

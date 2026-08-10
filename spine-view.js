@@ -30,7 +30,7 @@
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
   const VERSION = "0.2.2.1";
-  const RENDERER_REVISION = 4;
+  const RENDERER_REVISION = 7;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -3976,22 +3976,142 @@
     );
   }
 
+  function containsStructuredSummarySections(surface) {
+    return Boolean(
+      surface?.querySelector?.(
+        '[data-slot="thread-summary-panel-section-actions"]',
+      ) && surface.querySelector("button.group\\/section-toggle"),
+    );
+  }
+
+  function visibleElementRect(element) {
+    if (!element?.isConnected) return null;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return null;
+    const style = getComputedStyle(element);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      Number.parseFloat(style.opacity || "1") < 0.05
+    ) {
+      return null;
+    }
+    return rect;
+  }
+
+  function rectIntersectionRatio(left, right) {
+    const width = Math.max(
+      0,
+      Math.min(left.right, right.right) - Math.max(left.left, right.left),
+    );
+    const height = Math.max(
+      0,
+      Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top),
+    );
+    const smallerArea = Math.max(
+      1,
+      Math.min(left.width * left.height, right.width * right.height),
+    );
+    return (width * height) / smallerArea;
+  }
+
+  function containsSummarySectionGroup(surface) {
+    if (!surface?.querySelectorAll) return false;
+    if (surface.querySelector("#spine-codex-view")) return true;
+    const sectionParents = new Map();
+    for (const section of surface.querySelectorAll("section")) {
+      const parent = section.parentElement;
+      if (!parent) continue;
+      sectionParents.set(parent, (sectionParents.get(parent) ?? 0) + 1);
+    }
+    if (
+      [...sectionParents].some(([parent, count]) =>
+        count >= 2 || (count === 1 && parent.querySelectorAll("button").length >= 2))
+    ) {
+      return true;
+    }
+    return [...surface.querySelectorAll("div")].some((container) => {
+      const children = [...container.children];
+      if (children.length < 2 || children.length > 16) return false;
+      return children.filter((child) => child.querySelector?.("button")).length >= 2;
+    });
+  }
+
+  function isGeometricSummarySurface(surface, marker) {
+    if (!surface || surface === marker || surface.contains(marker)) return false;
+    const markerRect = marker.getBoundingClientRect();
+    const surfaceRect = visibleElementRect(surface);
+    if (!surfaceRect || markerRect.width < 120 || markerRect.height < 40) return false;
+    if (
+      surfaceRect.width < 180 ||
+      surfaceRect.width > 460 ||
+      Math.abs(surfaceRect.width - markerRect.width) > Math.max(80, markerRect.width * 0.35) ||
+      surfaceRect.width * surfaceRect.height > markerRect.width * markerRect.height * 2.5 ||
+      rectIntersectionRatio(surfaceRect, markerRect) < 0.65
+    ) {
+      return false;
+    }
+    return containsSummarySectionGroup(surface);
+  }
+
+  function geometricSummarySurfaces(marker) {
+    const candidates = new Set();
+    for (const sibling of marker.parentElement?.children ?? []) {
+      if (isGeometricSummarySurface(sibling, marker)) candidates.add(sibling);
+    }
+    const rect = marker.getBoundingClientRect();
+    const points = [
+      [rect.left + rect.width / 2, rect.top + Math.min(24, rect.height / 2)],
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.left + rect.width / 2, rect.bottom - Math.min(24, rect.height / 2)],
+    ];
+    for (const [x, y] of points) {
+      for (const hit of document.elementsFromPoint?.(x, y) ?? []) {
+        for (
+          let current = hit, depth = 0;
+          current && current !== document.body && depth < 7;
+          current = current.parentElement, depth += 1
+        ) {
+          if (isGeometricSummarySurface(current, marker)) candidates.add(current);
+        }
+      }
+    }
+    return [...candidates];
+  }
+
+  function pinnedSummarySurfaces() {
+    const surfaces = [];
+    for (const marker of document.querySelectorAll(
+      '[data-pip-obstacle="thread-summary-panel"]',
+    )) {
+      if (containsStructuredSummarySections(marker)) surfaces.push(marker);
+      for (const sibling of marker.parentElement?.children ?? []) {
+        if (sibling !== marker && containsStructuredSummarySections(sibling)) {
+          surfaces.push(sibling);
+        }
+      }
+      surfaces.push(...geometricSummarySurfaces(marker));
+    }
+    return [...new Set(surfaces)].filter((surface) => surface.isConnected);
+  }
+
   function summarySurfaceFor(element) {
-    const surface = element?.closest?.(
-      '[data-pip-obstacle="thread-summary-panel"], ' +
+    const floating = element?.closest?.(
       '[data-slot="popover-content"][role="dialog"][data-state="open"]',
     );
-    if (!surface) return null;
-    if (surface.hasAttribute("data-pip-obstacle")) return surface;
-    return isFloatingSummarySurface(surface) ? surface : null;
+    if (isFloatingSummarySurface(floating)) return floating;
+    const marker = element?.closest?.(
+      '[data-pip-obstacle="thread-summary-panel"]',
+    );
+    if (marker && containsStructuredSummarySections(marker)) return marker;
+    return pinnedSummarySurfaces().find((surface) =>
+      surface.contains(element)) ?? null;
   }
 
   function summaryPanels() {
     return [
       ...new Set([
-        ...document.querySelectorAll(
-          '[data-pip-obstacle="thread-summary-panel"]',
-        ),
+        ...pinnedSummarySurfaces(),
         ...[
           ...document.querySelectorAll(
             '[data-slot="popover-content"][role="dialog"][data-state="open"]',
@@ -4090,26 +4210,40 @@
   function findSummaryContainer() {
     const candidates = [];
     for (const panel of summaryPanels()) {
+      const containers = new Set();
       for (const button of panel.querySelectorAll("button")) {
-        if (!button.classList.contains("group/section-toggle")) continue;
         const section = button.closest("section");
-        const container = section?.parentElement;
-        if (
-          !container ||
-          candidates.some((item) => item.container === container)
-        ) {
+        if (section?.parentElement) containers.add(section.parentElement);
+      }
+      const sectionParents = new Map();
+      for (const section of panel.querySelectorAll("section")) {
+        const parent = section.parentElement;
+        if (!parent) continue;
+        sectionParents.set(parent, (sectionParents.get(parent) ?? 0) + 1);
+      }
+      for (const [container, count] of sectionParents) {
+        if (count >= 2) containers.add(container);
+      }
+      const existingHost = panel.querySelector("#spine-codex-view");
+      if (existingHost?.parentElement) containers.add(existingHost.parentElement);
+      for (const container of panel.querySelectorAll("div")) {
+        const children = [...container.children];
+        if (children.length < 2 || children.length > 16) continue;
+        if (children.filter((child) => child.querySelector?.("button")).length < 2) {
           continue;
         }
+        containers.add(container);
+      }
+      for (const container of containers) {
+        if (candidates.some((item) => item.container === container)) continue;
         const sections = [...container.children].filter(
           (child) => child.tagName === "SECTION",
         ).length;
-        const metrics = sections
-          ? summaryContainerMetrics(container)
-          : null;
+        const metrics = summaryContainerMetrics(container);
         if (!metrics) continue;
         candidates.push({
           container,
-          score: metrics.score,
+          score: metrics.score + sections * 25,
         });
       }
     }
