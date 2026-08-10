@@ -2,6 +2,7 @@
 
 set -eu
 
-readonly SPINE_CODEX_BIN="${SPINE_CODEX_BINARY:-/opt/homebrew/bin/spine-codex}"
+readonly SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+readonly SPINE_NODE="${SPINE_CODEX_SHIM_NODE:-node}"
 
-exec "${SPINE_CODEX_BIN}" --disable image_generation "$@"
+exec "${SPINE_NODE}" "${SCRIPT_DIR}/spine-codex.mjs" "$@"

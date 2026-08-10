@@ -29,8 +29,8 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "0.2.2.2";
-  const RENDERER_REVISION = 7;
+  const VERSION = "0.2.2.3";
+  const RENDERER_REVISION = 9;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -5576,12 +5576,13 @@
   }
 
   function onMessage(event) {
-    const settledFetch = settleCodexFetchResponse(event.data);
-    const settledAppServer = settleAppServerResponse(event.data);
-    if (!settledFetch && !settledAppServer) ingest(event.data);
+    const data = event.data;
+    const settledFetch = settleCodexFetchResponse(data);
+    const settledAppServer = settleAppServerResponse(data);
+    if (!settledFetch && !settledAppServer) ingest(data);
     if (
       !settledFetch &&
-      event.data?.type === "fetch-response" &&
+      data?.type === "fetch-response" &&
       document.querySelector?.(
         'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
       )

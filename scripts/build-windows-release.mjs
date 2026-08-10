@@ -80,6 +80,10 @@ await copyFile(
   join(ROOT, "lib", "main-inspector.mjs"),
   join(wrapper, "lib", "main-inspector.mjs"),
 );
+await copyFile(
+  join(ROOT, "lib", "app-server-output-filter.mjs"),
+  join(wrapper, "lib", "app-server-output-filter.mjs"),
+);
 await copyFile(join(ROOT, "LICENSE"), join(releaseRoot, "LICENSE"));
 await copyFile(join(ROOT, "NOTICE"), join(releaseRoot, "NOTICE"));
 await writeFile(join(releaseRoot, "README-Windows.txt"), windowsReadme());

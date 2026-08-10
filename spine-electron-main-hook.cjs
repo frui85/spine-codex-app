@@ -14,7 +14,10 @@ const MAIN_BUNDLE_PATTERN = /^main-[A-Za-z0-9_-]+\.js$/;
 const SHARED_BUNDLE_PATTERN = /^src-[A-Za-z0-9_-]+\.js$/;
 const REMOTE_SOCKET_MARKER = "[d]esktop-ssh-websocket-v0.sock";
 const VERSION_ERROR_MARKER = "codex-app-server-version-unsupported:";
+const LOCAL_CLI_ERROR_MARKER =
+  "Unable to locate the Codex CLI binary. Set CODEX_CLI_PATH or ensure the Electron resources include bin/codex.";
 const DEFAULT_HOOK_DEADLINE_MS = 30_000;
+const LOCAL_CLI_PATH_ENV = "SPINE_CODEX_LOCAL_CLI_PATH";
 const RENDERER_PATH_ENV = "SPINE_CODEX_RENDERER_PATH";
 const RENDERER_SHA256_ENV = "SPINE_CODEX_RENDERER_SHA256";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -23,6 +26,8 @@ const VERSION_CHECK_PATTERN =
   /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2===([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\(\2,([A-Za-z_$][\w$]*)\)>=0\}/g;
 const STABLE_VERSION_PATTERN =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:\+[0-9A-Za-z.-]+)?$/;
+const LOCAL_CLI_SELECTOR_PATTERN =
+  /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=process\.env\.CODEX_CLI_PATH;if\(\2==null\)return null;let ([A-Za-z_$][\w$]*)=\2\.trim\(\);return \3\.length===0\?null:\3\}/g;
 
 function isMainBundleFilename(filename) {
   return MAIN_BUNDLE_PATTERN.test(path.basename(String(filename ?? "")));
@@ -181,6 +186,28 @@ function patchRemoteBootstrapCleanupSource(source) {
   return patched;
 }
 
+function patchLocalCliSelectorSource(source) {
+  const input = String(source);
+  if (!input.includes(LOCAL_CLI_ERROR_MARKER)) {
+    throw new Error("Codex local CLI error marker was not found");
+  }
+  const matches = Array.from(input.matchAll(LOCAL_CLI_SELECTOR_PATTERN));
+  if (matches.length !== 1) {
+    throw new Error("Codex local CLI selector has an unsupported structure");
+  }
+  const [original, selectorName, rawName, trimmedName] = matches[0];
+  const replacement =
+    `function ${selectorName}(){let ${rawName}=` +
+    `process.env.${LOCAL_CLI_PATH_ENV}??process.env.CODEX_CLI_PATH;` +
+    `if(${rawName}==null)return null;let ${trimmedName}=${rawName}.trim();` +
+    `return ${trimmedName}.length===0?null:${trimmedName}}`;
+  return (
+    input.slice(0, matches[0].index) +
+    replacement +
+    input.slice(matches[0].index + original.length)
+  );
+}
+
 function patchMainBundleCandidateSource(filename, source) {
   if (
     !isMainBundleFilename(filename) ||
@@ -252,7 +279,8 @@ function patchVersionBundleCandidateSource(
   ) {
     return null;
   }
-  return patchVersionCompatibilitySource(String(source), minimum);
+  const localCliPatched = patchLocalCliSelectorSource(String(source));
+  return patchVersionCompatibilitySource(localCliPatched, minimum);
 }
 
 function parseVersion(value) {
@@ -297,7 +325,8 @@ function isCodexMainSurfaceUrl(value) {
     return (
       url.protocol === "app:" &&
       url.hostname === "-" &&
-      url.pathname === "/index.html"
+      url.pathname === "/index.html" &&
+      url.searchParams.get("initialRoute") !== "/avatar-overlay"
     );
   } catch {
     return false;
@@ -641,6 +670,7 @@ module.exports = {
   isSharedBundleFilename,
   patchRemoteBootstrapCleanupSource,
   patchMainBundleCandidateSource,
+  patchLocalCliSelectorSource,
   patchVersionCompatibilitySource,
   patchVersionBundleCandidateSource,
   writeHookStatus,
