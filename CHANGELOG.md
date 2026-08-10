@@ -1,5 +1,7 @@
 # Changelog
 
+> [简体中文](CHANGELOG_ZH.md) · **English**
+
 ## Unreleased
 
 ## v0.2.2.3 — 2026-08-10

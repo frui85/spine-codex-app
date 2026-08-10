@@ -4,6 +4,8 @@
 
 <h1 align="center">SpineCodex App</h1>
 
+<p align="center"><a href="README_ZH.md">简体中文</a> · <strong>English</strong></p>
+
 <p align="center">
   <strong>The Spine, inside Codex.</strong><br>
   An interactive task tree for Codex Desktop that feels like part of the App.
