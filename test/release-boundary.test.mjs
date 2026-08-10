@@ -23,18 +23,19 @@ const windowsCliShim = await readFile(
   new URL("bin/spine-codex.mjs", root),
   "utf8",
 );
+const macosCliShim = await readFile(new URL("bin/spine-codex", root), "utf8");
 const mainInspector = await readFile(
   new URL("lib/main-inspector.mjs", root),
   "utf8",
 );
 
-test("wrapper revision 0.2.2.2 tracks SpineCodex 0.2.2", () => {
+test("wrapper revision 0.2.2.3 tracks SpineCodex 0.2.2", () => {
   assert.equal(metadata.version, "0.2.2");
-  assert.equal(metadata.spineAppVersion, "0.2.2.2");
+  assert.equal(metadata.spineAppVersion, "0.2.2.3");
   assert.equal(metadata.spineCodexVersion, "0.2.2");
-  assert.match(launcher, /APP_VERSION = "0\.2\.2\.2"/);
+  assert.match(launcher, /APP_VERSION = "0\.2\.2\.3"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(renderer, /VERSION = "0\.2\.2\.2"/);
+  assert.match(renderer, /VERSION = "0\.2\.2\.3"/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
@@ -42,6 +43,7 @@ test("release builder bundles only wrapper files and a pinned Node runtime", () 
   assert.match(builder, /metadata\.spineAppVersion/);
   assert.match(builder, /valueAfter\("--version"\)/);
   assert.match(builder, /nodejs\.org\/dist/);
+  assert.match(builder, /\/usr\/bin\/qlmanage/);
   assert.doesNotMatch(builder, /@spinejit|GhabiX|SpineCodex\/releases|npm pack/);
   assert.deepEqual(metadata.dependencies, undefined);
   assert.deepEqual(metadata.optionalDependencies, undefined);
@@ -62,7 +64,11 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(windowsLauncher, /CREATE_NO_WINDOW/);
   assert.match(windowsCliShim, /SPINE_CODEX_BINARY/);
   assert.match(windowsCliShim, /"--disable",\s*"image_generation"/);
+  assert.match(windowsCliShim, /createAppServerOutputFilter/);
+  assert.match(macosCliShim, /SPINE_CODEX_SHIM_NODE/);
+  assert.match(macosCliShim, /spine-codex\.mjs/);
   assert.match(windowsBuilder, /lib", "main-inspector\.mjs/);
+  assert.match(windowsBuilder, /lib", "app-server-output-filter\.mjs/);
   assert.match(launcher, /--inspect-brk=127\.0\.0\.1:/);
   assert.match(launcher, /injectMainProcessHook/);
   assert.match(mainInspector, /Debugger\.evaluateOnCallFrame/);
@@ -84,6 +90,8 @@ test("renderer injection survives Electron renderer replacement", () => {
   assert.match(mainHook, /executeJavaScript\(payload\.source, false\)/);
   assert.match(mainHook, /url\.protocol === "app:"/);
   assert.match(mainHook, /url\.pathname === "\/index\.html"/);
+  assert.match(mainHook, /initialRoute/);
+  assert.match(mainHook, /\/avatar-overlay/);
   assert.match(mainHook, /SHA-256 mismatch/);
   assert.doesNotMatch(mainHook, /setInterval\(/);
 });

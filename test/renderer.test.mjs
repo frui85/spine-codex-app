@@ -107,8 +107,8 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.2.2.2");
-assert.equal(api.revision, 7);
+assert.equal(api.version, "0.2.2.3");
+assert.equal(api.revision, 8);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -129,7 +129,9 @@ assert.match(source, /addEventListener\("languagechange", onLanguageChange\)/);
 assert.match(source, /removeEventListener\("languagechange", onLanguageChange\)/);
 assert.match(source, /vscode:\/\/codex\/\$\{method\}/);
 assert.match(source, /key: "localeOverride"/);
-assert.match(source, /event\.data\?\.type === "fetch-response"/);
+assert.match(source, /data\?\.type === "fetch-response"/);
+assert.match(source, /APP_LIST_UPDATED_METHOD = "app\/list\/updated"/);
+assert.match(source, /stopImmediatePropagation/);
 assert.match(source, /data-settings-panel-slug="general-settings"/);
 assert.match(source, /function nativeTreeMotionSpec/);
 assert.match(source, /--transition-duration-relaxed/);
@@ -939,8 +941,25 @@ assert.deepEqual(api.getStats(), {
   subagentLabelSyncPending: false,
   subagentListObserved: false,
   subagentTitleHookPending: false,
+  blockedAppListUpdates: 0,
 });
 assert.equal(windowListeners.has("message"), true);
+const messageListener = windowListeners.get("message");
+let stoppedAppListUpdates = 0;
+const appListUpdate = {
+  data: {
+    type: "mcp-notification",
+    method: "app/list/updated",
+    params: { data: new Array(2_612) },
+  },
+  stopImmediatePropagation() {
+    stoppedAppListUpdates += 1;
+  },
+};
+messageListener(appListUpdate);
+messageListener(appListUpdate);
+assert.equal(stoppedAppListUpdates, 1);
+assert.equal(api.getStats().blockedAppListUpdates, 1);
 for (const [id, callback] of idleCallbacks) {
   idleCallbacks.delete(id);
   callback({ didTimeout: false, timeRemaining: () => 50 });
@@ -988,8 +1007,8 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.2.2.2");
-assert.equal(restoredApi.revision, 7);
+assert.equal(restoredApi.version, "0.2.2.3");
+assert.equal(restoredApi.revision, 8);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&

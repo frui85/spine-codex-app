@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { injectMainProcessHook } from "./lib/main-inspector.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.2.2.2";
+const APP_VERSION = "0.2.2.3";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -104,6 +104,7 @@ const appEnvironment = {
   // an absolute local-only path to the official `codex` command.
   CODEX_CLI_PATH: REMOTE_CLI_NAME,
   SPINE_CODEX_BINARY: spineCodex,
+  SPINE_CODEX_SHIM_NODE: process.execPath,
   SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
   SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
   SPINE_CODEX_RENDERER_PATH: join(HERE, "spine-view.js"),

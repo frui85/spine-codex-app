@@ -297,7 +297,8 @@ function isCodexMainSurfaceUrl(value) {
     return (
       url.protocol === "app:" &&
       url.hostname === "-" &&
-      url.pathname === "/index.html"
+      url.pathname === "/index.html" &&
+      url.searchParams.get("initialRoute") !== "/avatar-overlay"
     );
   } catch {
     return false;

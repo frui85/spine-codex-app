@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.2.2.3 — 2026-08-10
+
+Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
+
+- Breaks the `app/list/updated` feedback loop between SpineCodex 0.2.2 and Codex Desktop `26.803.41515` by deduplicating unchanged catalog notifications in the local app-server transport before they reach Desktop.
+- Prevents multi-core CPU saturation, repeated 2,612-app payload deserialization, renderer memory growth, and sustained thermal load caused by that loop.
+- Restricts Spine View recovery injection to the primary Codex surface and excludes the full `avatar-overlay` renderer.
+- Keeps a renderer burst guard and blocked-update diagnostic as a second layer of protection.
+
 ## v0.2.2.2 — 2026-08-10
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.

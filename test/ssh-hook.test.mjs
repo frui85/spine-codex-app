@@ -263,6 +263,7 @@ assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
 assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_PATH:/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_SHA256:/);
+assert.match(wrapperSource, /SPINE_CODEX_SHIM_NODE: process\.execPath/);
 assert.match(wrapperSource, /rendererRecovery !== true/);
 assert.match(
   wrapperSource,
@@ -274,12 +275,22 @@ assert.match(wrapperSource, /readElectronFuse/);
 assert.match(wrapperSource, /NODE_OPTIONS_FUSE_INDEX = 2/);
 assert.match(wrapperSource, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
 
-assert.match(shimSource, /SPINE_CODEX_BINARY/);
-assert.match(shimSource, /--disable image_generation/);
+assert.match(shimSource, /SPINE_CODEX_SHIM_NODE/);
+assert.match(shimSource, /spine-codex\.mjs/);
 assert.match(shimSource, /"\$@"/);
 
 assert.equal(hook.isCodexMainSurfaceUrl("app://-/index.html"), true);
 assert.equal(hook.isCodexMainSurfaceUrl("app://-/index.html#/thread/1"), true);
+assert.equal(
+  hook.isCodexMainSurfaceUrl(
+    "app://-/index.html?initialRoute=%2Favatar-overlay",
+  ),
+  false,
+);
+assert.equal(
+  hook.isCodexMainSurfaceUrl("app://-/index.html?initialRoute=%2Fthread"),
+  true,
+);
 assert.equal(hook.isCodexMainSurfaceUrl("https://example.com/index.html"), false);
 assert.equal(hook.isCodexMainSurfaceUrl("app://-/settings.html"), false);
 
