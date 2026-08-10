@@ -3,10 +3,11 @@ import { once } from "node:events";
 import test from "node:test";
 import { createAppServerOutputFilter } from "../lib/app-server-output-filter.mjs";
 
-async function filterChunks(chunks) {
+async function filterChunks(chunks, options = {}) {
   let output = "";
   let suppressed = 0;
   const filter = createAppServerOutputFilter({
+    ...options,
     onSuppressed(count) {
       suppressed = count;
     },
@@ -46,6 +47,66 @@ test("a genuinely changed app catalog is forwarded", async () => {
 
   assert.equal(result.output, `${first}\n${changed}\n`);
   assert.equal(result.suppressed, 0);
+});
+
+test("a recently seen catalog is suppressed after an intervening update", async () => {
+  const first = JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "one" }] },
+  });
+  const changed = JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "two" }] },
+  });
+  const result = await filterChunks([`${first}\n${changed}\n${first}\n`]);
+
+  assert.equal(result.output, `${first}\n${changed}\n`);
+  assert.equal(result.suppressed, 1);
+});
+
+test("semantically identical catalog arrays are order independent", async () => {
+  const first = JSON.stringify({
+    method: "app/list/updated",
+    params: {
+      data: [{
+        id: "one",
+        labels: ["beta", "alpha"],
+        iconAssets: [{ url: "two" }, { url: "one" }],
+      }],
+    },
+  });
+  const reordered = JSON.stringify({
+    method: "app/list/updated",
+    params: {
+      data: [{
+        iconAssets: [{ url: "one" }, { url: "two" }],
+        labels: ["alpha", "beta"],
+        id: "one",
+      }],
+    },
+  });
+  const result = await filterChunks([`${first}\n${reordered}\n`]);
+
+  assert.equal(result.output, `${first}\n`);
+  assert.equal(result.suppressed, 1);
+});
+
+test("a catalog can be forwarded again after the dedupe window", async () => {
+  let timestamp = 1_000;
+  const update = JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "one" }] },
+  });
+  const filter = createAppServerOutputFilter({ now: () => timestamp });
+  let output = "";
+  filter.setEncoding("utf8");
+  filter.on("data", (chunk) => { output += chunk; });
+  filter.write(`${update}\n`);
+  timestamp += 10_000;
+  filter.end(`${update}\n`);
+  await once(filter, "end");
+
+  assert.equal(output, `${update}\n${update}\n`);
 });
 
 test("malformed and unrelated output passes through unchanged", async () => {

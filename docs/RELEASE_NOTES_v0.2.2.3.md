@@ -7,10 +7,11 @@ This wrapper revision continues to require an externally installed SpineCodex
 
 - Prevents the `app/list/updated` feedback loop observed when SpineCodex 0.2.2
   is used with Codex Desktop build `26.803.41515`.
-- Deduplicates unchanged app-catalog notifications in the local app-server
-  transport before they reach Desktop, while forwarding the first catalog and
-  every genuinely changed catalog. This stops the repeated 1,000 + 1,000 + 612
-  item pagination cycles without relying on renderer listener order.
+- Deduplicates recently seen app-catalog snapshots in the local app-server
+  transport before they reach Desktop, while forwarding new catalog states and
+  allowing the same state again after a quiet window. This stops alternating
+  snapshots from repeating the 1,000 + 1,000 + 612 item pagination cycle
+  without relying on renderer listener order.
 - Restricts the full Spine View injection to the primary Codex page instead of
   also attaching it to the `avatar-overlay` renderer.
 - Keeps a renderer burst guard and diagnostic counter as a second layer of
