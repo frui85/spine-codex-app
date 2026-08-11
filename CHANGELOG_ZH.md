@@ -4,6 +4,19 @@
 
 ## 尚未发布
 
+## v0.2.2.4 - 2026-08-11
+
+仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。
+
+- 为 Codex Desktop 的 `app/installed` 与 `app/read` 生命周期加入能力探测型
+  app-server 协议适配器。SpineCodex 0.2.2 仅回退一次到分页 `app/list`，合并
+  并发加载，按文档映射运行状态与元数据响应，并吸收新鲜目录触发的
+  `forceRefresh` 反馈，避免重复未知方法错误和目录重载；未来原生支持这些
+  方法的后端仍会直接透传。
+- 保持原生 `avatar-overlay` 窗口不受 Spine 注入，同时在本地 app-server
+  传输层对临时 `pluginDisplayNames` 补全做单调收敛处理，避免交替变化的
+  数 MB 应用目录快照反复进入任一 Desktop Renderer。
+
 ## v0.2.2.3 - 2026-08-10
 
 仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。

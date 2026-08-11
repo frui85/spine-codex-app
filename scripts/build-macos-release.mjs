@@ -106,6 +106,10 @@ async function build(architecture) {
     join(ROOT, "lib", "app-server-output-filter.mjs"),
     join(wrapper, "lib", "app-server-output-filter.mjs"),
   );
+  await copyFile(
+    join(ROOT, "lib", "app-server-protocol-adapter.mjs"),
+    join(wrapper, "lib", "app-server-protocol-adapter.mjs"),
+  );
   await chmod(join(wrapper, "bin", "spine-codex"), 0o755);
 
   await writeFile(join(macos, BUNDLE_NAME), appLauncher(), { mode: 0o755 });

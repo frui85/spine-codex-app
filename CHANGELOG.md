@@ -4,6 +4,21 @@
 
 ## Unreleased
 
+## v0.2.2.4 — 2026-08-11
+
+Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
+
+- Adds a capability-probing app-server protocol adapter for Codex Desktop's
+  `app/installed` and `app/read` lifecycle. SpineCodex 0.2.2 falls back once to
+  paginated `app/list`, coalesces concurrent loads, maps the documented runtime
+  and metadata responses, and absorbs fresh `forceRefresh` feedback without
+  repeated unsupported-method errors or catalog reloads. Future backends with
+  native support pass through unchanged.
+- Keeps the native `avatar-overlay` window untouched while making transient
+  `pluginDisplayNames` enrichment monotonic in the local app-server transport,
+  so alternating multi-megabyte catalog snapshots converge instead of
+  repeatedly reaching either Desktop renderer.
+
 ## v0.2.2.3 — 2026-08-10
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.

@@ -29,8 +29,8 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "0.2.2.3";
-  const RENDERER_REVISION = 9;
+  const VERSION = "0.2.2.4";
+  const RENDERER_REVISION = 10;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>

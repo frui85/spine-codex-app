@@ -2,6 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { createAppServerOutputFilter } from "../lib/app-server-output-filter.mjs";
+import { createAppServerProtocolAdapter } from "../lib/app-server-protocol-adapter.mjs";
 
 const binary = process.env.SPINE_CODEX_BINARY;
 if (!binary) {
@@ -19,13 +20,15 @@ const filtersAppServerOutput = process.argv.slice(2).includes("app-server");
 const child = spawn(binary, commandArguments, {
   env: process.env,
   shell,
-  stdio: filtersAppServerOutput ? ["inherit", "pipe", "inherit"] : "inherit",
+  stdio: filtersAppServerOutput ? ["pipe", "pipe", "inherit"] : "inherit",
   windowsHide: true,
 });
 
 let outputDrained = Promise.resolve();
 if (filtersAppServerOutput) {
+  const serverWriter = createBufferedLineWriter(child.stdin);
   let reportedSuppression = false;
+  const reportedFallbacks = new Set();
   const filter = createAppServerOutputFilter({
     onSuppressed() {
       if (reportedSuppression) return;
@@ -35,12 +38,28 @@ if (filtersAppServerOutput) {
       );
     },
   });
+  const clientWriter = createBufferedLineWriter(filter);
+  const adapter = createAppServerProtocolAdapter({
+    writeToServer: serverWriter.write,
+    writeToClient: clientWriter.write,
+    onIdle: serverWriter.end,
+    onLegacyFallback(method) {
+      if (reportedFallbacks.has(method)) return;
+      reportedFallbacks.add(method);
+      console.error(
+        `spine-codex shim: using legacy app/list compatibility for ${method}`,
+      );
+    },
+  });
   outputDrained = new Promise((resolve, reject) => {
     filter.once("end", resolve);
     filter.once("error", reject);
     child.stdout.once("error", reject);
+    child.stdin.once("error", reject);
   });
-  child.stdout.pipe(filter).pipe(process.stdout, { end: false });
+  filter.pipe(process.stdout, { end: false });
+  consumeLines(process.stdin, adapter.acceptClientLine, adapter.endClientInput);
+  consumeLines(child.stdout, adapter.acceptServerLine, () => clientWriter.end());
 }
 
 child.once("error", (error) => {
@@ -60,3 +79,52 @@ child.once("exit", async (status, signal) => {
   }
   process.exit(status ?? 1);
 });
+
+function consumeLines(stream, onLine, onEnd) {
+  let buffered = "";
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    buffered += chunk;
+    let newlineIndex;
+    while ((newlineIndex = buffered.indexOf("\n")) !== -1) {
+      const line = buffered.slice(0, newlineIndex);
+      buffered = buffered.slice(newlineIndex + 1);
+      if (line.length > 0) onLine(line);
+    }
+  });
+  stream.once("end", () => {
+    if (buffered.length > 0) onLine(buffered);
+    onEnd();
+  });
+}
+
+function createBufferedLineWriter(stream) {
+  const queued = [];
+  let blocked = false;
+  let ending = false;
+
+  const finishIfReady = () => {
+    if (ending && !blocked && queued.length === 0) stream.end();
+  };
+
+  const flush = () => {
+    blocked = false;
+    while (queued.length > 0 && !blocked) {
+      blocked = !stream.write(`${queued.shift()}\n`);
+    }
+    finishIfReady();
+  };
+
+  stream.on("drain", flush);
+  return {
+    write(line) {
+      if (ending) throw new Error("cannot write after stream end");
+      if (blocked) queued.push(line);
+      else blocked = !stream.write(`${line}\n`);
+    },
+    end() {
+      ending = true;
+      finishIfReady();
+    },
+  };
+}

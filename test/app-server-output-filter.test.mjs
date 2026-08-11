@@ -64,6 +64,74 @@ test("a catalog restored after an intervening update is forwarded", async () => 
   assert.equal(result.suppressed, 0);
 });
 
+test("transient plugin display-name enrichment converges instead of alternating", async () => {
+  const baseApps = [
+    { id: "sites", pluginDisplayNames: [] },
+    { id: "github", pluginDisplayNames: [] },
+    { id: "documents", pluginDisplayNames: [] },
+  ];
+  const base = JSON.stringify({
+    method: "app/list/updated",
+    params: { data: baseApps },
+  });
+  const enriched = JSON.stringify({
+    method: "app/list/updated",
+    params: {
+      data: [
+        { id: "sites", pluginDisplayNames: ["Sites"] },
+        { id: "github", pluginDisplayNames: ["GitHub"] },
+        { id: "documents", pluginDisplayNames: ["Spreadsheets"] },
+      ],
+    },
+  });
+  const result = await filterChunks([
+    `${base}\n${enriched}\n${base}\n${enriched}\n`,
+  ]);
+
+  assert.equal(result.output, `${base}\n${enriched}\n`);
+  assert.equal(result.suppressed, 2);
+});
+
+test("each newly observed plugin display name is forwarded at most once", async () => {
+  const update = (pluginDisplayNames) => JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "one", pluginDisplayNames }] },
+  });
+  const base = update([]);
+  const firstEnrichment = update(["One"]);
+  const secondEnrichment = update(["One", "Uno"]);
+  const staleEnrichment = update(["One"]);
+  const result = await filterChunks([
+    `${base}\n${firstEnrichment}\n${base}\n${secondEnrichment}\n${staleEnrichment}\n`,
+  ]);
+
+  assert.equal(
+    result.output,
+    `${base}\n${firstEnrichment}\n${secondEnrichment}\n`,
+  );
+  assert.equal(result.suppressed, 2);
+});
+
+test("a real catalog transition resets plugin display-name enrichment", async () => {
+  const update = (enabled, pluginDisplayNames) => JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "one", enabled, pluginDisplayNames }] },
+  });
+  const first = update(true, []);
+  const firstEnrichment = update(true, ["One"]);
+  const changed = update(false, []);
+  const changedEnrichment = update(false, ["One"]);
+  const result = await filterChunks([
+    `${first}\n${firstEnrichment}\n${changed}\n${changedEnrichment}\n`,
+  ]);
+
+  assert.equal(
+    result.output,
+    `${first}\n${firstEnrichment}\n${changed}\n${changedEnrichment}\n`,
+  );
+  assert.equal(result.suppressed, 0);
+});
+
 test("semantically identical catalog arrays are order independent", async () => {
   const first = JSON.stringify({
     method: "app/list/updated",
