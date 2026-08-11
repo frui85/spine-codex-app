@@ -18,11 +18,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadata = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
 const VERSION = valueAfter("--version") ?? metadata.spineAppVersion ?? metadata.version;
 const SOURCE_VERSION = metadata.spineAppVersion ?? metadata.version;
+const MIN_SPINE_CODEX_VERSION = metadata.spineCodexVersion;
 if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(VERSION)) {
   throw new Error(`invalid release version: ${VERSION}`);
 }
 if (VERSION !== SOURCE_VERSION) {
   throw new Error(`release version ${VERSION} does not match source ${SOURCE_VERSION}`);
+}
+if (!/^\d+\.\d+\.\d+$/.test(MIN_SPINE_CODEX_VERSION)) {
+  throw new Error(`invalid minimum SpineCodex version: ${MIN_SPINE_CODEX_VERSION}`);
 }
 const NODE_VERSION = "v22.23.2";
 const ARCHITECTURE = valueAfter("--arch") ?? "x64";
@@ -83,6 +87,10 @@ await copyFile(
 await copyFile(
   join(ROOT, "lib", "app-server-output-filter.mjs"),
   join(wrapper, "lib", "app-server-output-filter.mjs"),
+);
+await copyFile(
+  join(ROOT, "lib", "app-server-protocol-adapter.mjs"),
+  join(wrapper, "lib", "app-server-protocol-adapter.mjs"),
 );
 await copyFile(join(ROOT, "LICENSE"), join(releaseRoot, "LICENSE"));
 await copyFile(join(ROOT, "NOTICE"), join(releaseRoot, "NOTICE"));
@@ -178,7 +186,7 @@ function windowsReadme() {
     "Requirements:\r\n" +
     "- Windows 10 build 17763 or newer\r\n" +
     "- The current Codex Desktop app from Microsoft Store\r\n" +
-    `- SpineCodex ${VERSION} or newer installed separately\r\n\r\n` +
+    `- SpineCodex ${MIN_SPINE_CODEX_VERSION} or newer installed separately\r\n\r\n` +
     "Run SpineCodex App.exe. The launcher discovers both external dependencies, " +
     "starts Codex with a loopback-only debugging port, injects Spine View, and exits.\r\n\r\n" +
     "This portable package contains only the wrapper and Node.js runtime. " +

@@ -49,7 +49,7 @@ test("a genuinely changed app catalog is forwarded", async () => {
   assert.equal(result.suppressed, 0);
 });
 
-test("a recently seen catalog is suppressed after an intervening update", async () => {
+test("a catalog restored after an intervening update is forwarded", async () => {
   const first = JSON.stringify({
     method: "app/list/updated",
     params: { data: [{ id: "one" }] },
@@ -60,8 +60,76 @@ test("a recently seen catalog is suppressed after an intervening update", async 
   });
   const result = await filterChunks([`${first}\n${changed}\n${first}\n`]);
 
-  assert.equal(result.output, `${first}\n${changed}\n`);
-  assert.equal(result.suppressed, 1);
+  assert.equal(result.output, `${first}\n${changed}\n${first}\n`);
+  assert.equal(result.suppressed, 0);
+});
+
+test("transient plugin display-name enrichment converges instead of alternating", async () => {
+  const baseApps = [
+    { id: "sites", pluginDisplayNames: [] },
+    { id: "github", pluginDisplayNames: [] },
+    { id: "documents", pluginDisplayNames: [] },
+  ];
+  const base = JSON.stringify({
+    method: "app/list/updated",
+    params: { data: baseApps },
+  });
+  const enriched = JSON.stringify({
+    method: "app/list/updated",
+    params: {
+      data: [
+        { id: "sites", pluginDisplayNames: ["Sites"] },
+        { id: "github", pluginDisplayNames: ["GitHub"] },
+        { id: "documents", pluginDisplayNames: ["Spreadsheets"] },
+      ],
+    },
+  });
+  const result = await filterChunks([
+    `${base}\n${enriched}\n${base}\n${enriched}\n`,
+  ]);
+
+  assert.equal(result.output, `${base}\n${enriched}\n`);
+  assert.equal(result.suppressed, 2);
+});
+
+test("each newly observed plugin display name is forwarded at most once", async () => {
+  const update = (pluginDisplayNames) => JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "one", pluginDisplayNames }] },
+  });
+  const base = update([]);
+  const firstEnrichment = update(["One"]);
+  const secondEnrichment = update(["One", "Uno"]);
+  const staleEnrichment = update(["One"]);
+  const result = await filterChunks([
+    `${base}\n${firstEnrichment}\n${base}\n${secondEnrichment}\n${staleEnrichment}\n`,
+  ]);
+
+  assert.equal(
+    result.output,
+    `${base}\n${firstEnrichment}\n${secondEnrichment}\n`,
+  );
+  assert.equal(result.suppressed, 2);
+});
+
+test("a real catalog transition resets plugin display-name enrichment", async () => {
+  const update = (enabled, pluginDisplayNames) => JSON.stringify({
+    method: "app/list/updated",
+    params: { data: [{ id: "one", enabled, pluginDisplayNames }] },
+  });
+  const first = update(true, []);
+  const firstEnrichment = update(true, ["One"]);
+  const changed = update(false, []);
+  const changedEnrichment = update(false, ["One"]);
+  const result = await filterChunks([
+    `${first}\n${firstEnrichment}\n${changed}\n${changedEnrichment}\n`,
+  ]);
+
+  assert.equal(
+    result.output,
+    `${first}\n${firstEnrichment}\n${changed}\n${changedEnrichment}\n`,
+  );
+  assert.equal(result.suppressed, 0);
 });
 
 test("semantically identical catalog arrays are order independent", async () => {
@@ -91,22 +159,18 @@ test("semantically identical catalog arrays are order independent", async () => 
   assert.equal(result.suppressed, 1);
 });
 
-test("a catalog can be forwarded again after the dedupe window", async () => {
-  let timestamp = 1_000;
+test("a burst of identical catalogs forwards only the first snapshot", async () => {
   const update = JSON.stringify({
     method: "app/list/updated",
     params: { data: [{ id: "one" }] },
   });
-  const filter = createAppServerOutputFilter({ now: () => timestamp });
-  let output = "";
-  filter.setEncoding("utf8");
-  filter.on("data", (chunk) => { output += chunk; });
-  filter.write(`${update}\n`);
-  timestamp += 10_000;
-  filter.end(`${update}\n`);
-  await once(filter, "end");
+  const copies = 250;
+  const result = await filterChunks([
+    `${new Array(copies).fill(update).join("\n")}\n`,
+  ]);
 
-  assert.equal(output, `${update}\n${update}\n`);
+  assert.equal(result.output, `${update}\n`);
+  assert.equal(result.suppressed, copies - 1);
 });
 
 test("malformed and unrelated output passes through unchanged", async () => {

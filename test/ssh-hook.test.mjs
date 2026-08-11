@@ -404,6 +404,13 @@ assert.equal(
   recovery.payload.sha256,
   createHash("sha256").update(recoverySourceTwo).digest("hex"),
 );
+const avatarOverlay = new FakeWebContents(
+  "app://-/index.html?initialRoute=%2Favatar-overlay",
+);
+fakeApp.emit("web-contents-created", {}, avatarOverlay);
+avatarOverlay.emit("did-finish-load");
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(avatarOverlay.executions.length, 0);
 const devtoolsSurface = new FakeWebContents("devtools://devtools/bundled/", "window");
 fakeApp.emit("web-contents-created", {}, devtoolsSurface);
 devtoolsSurface.emit("did-finish-load");

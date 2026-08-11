@@ -5,8 +5,6 @@
   const TREE_METHOD = "turn/spineTree/updated";
   const SPAWN_METHOD = "turn/spineSpawnProgress/updated";
   const RAW_RESPONSE_ITEM_METHOD = "rawResponseItem/completed";
-  const APP_LIST_UPDATED_METHOD = "app/list/updated";
-  const APP_LIST_UPDATE_BURST_WINDOW_MS = 1_000;
   const SPINE_FEATURE_PREFIX = /^(?:spine_|spinetree_)/;
   const SPINE_STABLE_SETTINGS_FEATURES = new Set([
     "spine_jit",
@@ -31,8 +29,8 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "0.2.2.3";
-  const RENDERER_REVISION = 8;
+  const VERSION = "0.2.2.4";
+  const RENDERER_REVISION = 10;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -1020,8 +1018,6 @@
     requestSequence: 0,
     pendingRequests: new Map(),
     pendingFetchRequests: new Map(),
-    lastForwardedAppListUpdateAt: Number.NEGATIVE_INFINITY,
-    blockedAppListUpdates: 0,
     localeSyncTimer: 0,
     localeSyncInFlight: false,
     snapshotCacheDirty: false,
@@ -5579,27 +5575,8 @@
     return changed;
   }
 
-  function suppressAppListUpdateBurst(event, data) {
-    if (
-      data?.type !== "mcp-notification" ||
-      data.method !== APP_LIST_UPDATED_METHOD
-    ) return false;
-    const now = Date.now();
-    if (
-      now - state.lastForwardedAppListUpdateAt >=
-      APP_LIST_UPDATE_BURST_WINDOW_MS
-    ) {
-      state.lastForwardedAppListUpdateAt = now;
-      return false;
-    }
-    state.blockedAppListUpdates += 1;
-    event.stopImmediatePropagation?.();
-    return true;
-  }
-
   function onMessage(event) {
     const data = event.data;
-    if (suppressAppListUpdateBurst(event, data)) return;
     const settledFetch = settleCodexFetchResponse(data);
     const settledAppServer = settleAppServerResponse(data);
     if (!settledFetch && !settledAppServer) ingest(data);
@@ -5871,7 +5848,6 @@
       subagentLabelSyncPending: state.subagentLabelFrame !== 0,
       subagentListObserved: Boolean(state.subagentListObserver),
       subagentTitleHookPending: Boolean(state.subagentTitleObserver),
-      blockedAppListUpdates: state.blockedAppListUpdates,
     }),
     exportSnapshots: () => [...state.snapshots.values()],
     exportSpawnIntents: () => [...state.spawnIntents.entries()].map(

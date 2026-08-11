@@ -4,15 +4,30 @@
 
 ## Unreleased
 
+## v0.2.2.4 — 2026-08-11
+
+Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
+
+- Adds a capability-probing app-server protocol adapter for Codex Desktop's
+  `app/installed` and `app/read` lifecycle. SpineCodex 0.2.2 falls back once to
+  paginated `app/list`, coalesces concurrent loads, maps the documented runtime
+  and metadata responses, and absorbs fresh `forceRefresh` feedback without
+  repeated unsupported-method errors or catalog reloads. Future backends with
+  native support pass through unchanged.
+- Keeps the native `avatar-overlay` window untouched while making transient
+  `pluginDisplayNames` enrichment monotonic in the local app-server transport,
+  so alternating multi-megabyte catalog snapshots converge instead of
+  repeatedly reaching either Desktop renderer.
+
 ## v0.2.2.3 — 2026-08-10
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
 
-- Breaks the `app/list/updated` feedback loop between SpineCodex 0.2.2 and Codex Desktop `26.803.41515` by deduplicating recently seen catalog snapshots in the local app-server transport before they reach Desktop.
+- Breaks the `app/list/updated` feedback loop between SpineCodex 0.2.2 and Codex Desktop `26.803.41515` by deduplicating consecutive, semantically identical catalog snapshots in the local app-server transport before they reach Desktop.
 - Pins only Desktop's local CLI selector to the packaged private shim, preventing a login-shell `PATH` refresh from bypassing the output filter while keeping remote SSH on the portable `spine-codex` command name.
 - Prevents multi-core CPU saturation, repeated 2,612-app payload deserialization, renderer memory growth, and sustained thermal load caused by that loop.
 - Restricts Spine View recovery injection to the primary Codex surface and excludes the full `avatar-overlay` renderer.
-- Keeps a renderer burst guard and blocked-update diagnostic as a second layer of protection.
+- Forwards every genuine catalog transition, including `A → B → A`, and removes the renderer's time-only burst guard.
 
 ## v0.2.2.2 — 2026-08-10
 

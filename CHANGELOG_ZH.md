@@ -4,15 +4,28 @@
 
 ## 尚未发布
 
+## v0.2.2.4 - 2026-08-11
+
+仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。
+
+- 为 Codex Desktop 的 `app/installed` 与 `app/read` 生命周期加入能力探测型
+  app-server 协议适配器。SpineCodex 0.2.2 仅回退一次到分页 `app/list`，合并
+  并发加载，按文档映射运行状态与元数据响应，并吸收新鲜目录触发的
+  `forceRefresh` 反馈，避免重复未知方法错误和目录重载；未来原生支持这些
+  方法的后端仍会直接透传。
+- 保持原生 `avatar-overlay` 窗口不受 Spine 注入，同时在本地 app-server
+  传输层对临时 `pluginDisplayNames` 补全做单调收敛处理，避免交替变化的
+  数 MB 应用目录快照反复进入任一 Desktop Renderer。
+
 ## v0.2.2.3 - 2026-08-10
 
 仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。
 
-- 在本地 app-server 传输层对近期应用目录快照去重，阻断 SpineCodex 0.2.2 与 Codex Desktop `26.803.41515` 之间的 `app/list/updated` 反馈循环，避免重复快照进入 Desktop。
+- 在本地 app-server 传输层对连续且语义相同的应用目录快照去重，阻断 SpineCodex 0.2.2 与 Codex Desktop `26.803.41515` 之间的 `app/list/updated` 反馈循环，避免重复快照进入 Desktop。
 - 仅将 Desktop 的本地 CLI selector 固定到安装包私有 shim，防止登录 shell 刷新 `PATH` 后绕过输出过滤器，同时让远程 SSH 继续使用便携命令名 `spine-codex`。
 - 避免反馈循环造成的多核 CPU 饱和、2,612 项应用载荷反复反序列化、Renderer 内存增长和持续热负载。
 - 将 Spine View 恢复注入限制在 Codex 主区域，并排除完整的 `avatar-overlay` Renderer。
-- 保留 Renderer 突发消息保护与被阻止更新计数，作为第二层防护。
+- 正常转发包括 `A → B → A` 在内的每次真实目录变化，并移除 Renderer 中仅按时间判断的突发消息保护。
 
 ## v0.2.2.2 - 2026-08-10
 

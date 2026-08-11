@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.3"><img alt="Release v0.2.2.3" src="https://img.shields.io/badge/release-v0.2.2.3-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.4"><img alt="Release v0.2.2.4" src="https://img.shields.io/badge/release-v0.2.2.4-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.3/SpineCodex-App-v0.2.2.3-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.3/SpineCodex-App-v0.2.2.3-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -105,8 +105,8 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.2.3-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.3/SpineCodex-App-v0.2.2.3-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.2.3-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.3/SpineCodex-App-v0.2.2.3-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v0.2.2.4-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v0.2.2.4-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-x64.dmg) |
 
 The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
@@ -190,7 +190,7 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-The first three release components track the minimum supported SpineCodex release; a fourth component identifies wrapper-only revisions. This release is **v0.2.2.3** and still requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
+The first three release components track the minimum supported SpineCodex release; a fourth component identifies wrapper-only revisions. This release is **v0.2.2.4** and still requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
 
 Pushing a matching `v*` tag starts the checked-in GitHub Actions release pipeline. The workflow validates the tag against `package.json#spineAppVersion`, runs the full checks, builds and verifies both macOS DMGs, uploads immutable workflow artifacts, and only then publishes the GitHub Release. Release creation begins as a draft so a failed upload cannot expose a partial release. Windows workflow code is present but intentionally disabled.
 
