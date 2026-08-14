@@ -33,13 +33,13 @@ const appServerProtocolAdapter = await readFile(
   "utf8",
 );
 
-test("wrapper revision 0.2.2.4 tracks SpineCodex 0.2.2", () => {
+test("wrapper revision 0.2.2.5 tracks SpineCodex 0.2.2", () => {
   assert.equal(metadata.version, "0.2.2");
-  assert.equal(metadata.spineAppVersion, "0.2.2.4");
+  assert.equal(metadata.spineAppVersion, "0.2.2.5");
   assert.equal(metadata.spineCodexVersion, "0.2.2");
-  assert.match(launcher, /APP_VERSION = "0\.2\.2\.4"/);
+  assert.match(launcher, /APP_VERSION = "0\.2\.2\.5"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(renderer, /VERSION = "0\.2\.2\.4"/);
+  assert.match(renderer, /VERSION = "0\.2\.2\.5"/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {

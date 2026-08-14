@@ -4,6 +4,15 @@
 
 ## 尚未发布
 
+## v0.2.2.5 - 2026-08-14
+
+仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。
+
+- 支持 ChatGPT Desktop `26.810.41047` 引入的分组式 SSH app-server
+  bootstrap 结构，包括安全目录初始化、转发 SSH Agent 准备和日志初始化。
+- 在注入 SpineCodex bootstrap 前完整替换分组清理表达式，避免遗留未闭合的
+  shell 子进程分组，同时继续对未知 bundle 保持失败关闭策略。
+
 ## v0.2.2.4 - 2026-08-11
 
 仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。

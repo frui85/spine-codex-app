@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.4"><img alt="Release v0.2.2.4" src="https://img.shields.io/badge/release-v0.2.2.4-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.5"><img alt="Release v0.2.2.5" src="https://img.shields.io/badge/release-v0.2.2.5-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES_ZH.md">查看全部功能</a>
 </p>
@@ -105,8 +105,8 @@ spine-codex --version
 
 | Mac | 下载 |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.2.4-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.2.4-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v0.2.2.5-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v0.2.2.5-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-x64.dmg) |
 
 发布包只包含本包装层及其私有 Node.js 运行时。**不会打包、下载或安装 Codex Desktop 和 SpineCodex。** 如果缺少任一依赖，内置诊断会一次性报告两项要求，并且不会修改系统。
 
@@ -182,7 +182,7 @@ cd spine-codex-app
 <details>
 <summary><strong>构建、版本与兼容性</strong></summary>
 
-版本前三段跟踪最低支持的 SpineCodex 版本，第四段表示仅包装层修订。本版本为 **v0.2.2.4**，最低仍要求 SpineCodex 0.2.2。版本跟踪不代表本仓库重新分发 SpineCodex。
+版本前三段跟踪最低支持的 SpineCodex 版本，第四段表示仅包装层修订。本版本为 **v0.2.2.5**，最低仍要求 SpineCodex 0.2.2。版本跟踪不代表本仓库重新分发 SpineCodex。
 
 推送匹配的 `v*` tag 会启动仓库内 GitHub Actions 发布流水线。工作流先校验 tag 与 `package.json#spineAppVersion`，运行完整检查，构建并验证两个 macOS DMG，上传不可变工作流资产，最后才发布 GitHub Release。Release 会先创建为草稿，避免上传失败时暴露不完整版本。Windows 工作流代码已保留，但有意禁用。
 

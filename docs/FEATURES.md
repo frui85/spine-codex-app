@@ -2,7 +2,7 @@
 
 > [简体中文](FEATURES_ZH.md) · **English**
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.2.2.4. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.2.2.5. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not

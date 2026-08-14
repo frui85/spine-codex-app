@@ -191,6 +191,19 @@ const forwardedAgentBootstrapSource =
   "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
   "` || true) && `,prepareAgent,` && SSH_AUTH_SOCK=`,agentSocket,` nohup `," +
   "`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
+const groupedForwardedAgentBootstrapSource =
+  "function quote(e){return e}" +
+  "let controlDir=\"/tmp/app-server-control\"," +
+  "logPath=\"/tmp/app-server.log\"," +
+  "agentSocket=\"/tmp/forwarded-ssh-agent.sock\"," +
+  "prepareAgent=\"prepare-forwarded-agent\";" +
+  "let command=[`prefix; `,`(umask 077; mkdir -p -- `,controlDir," +
+  "` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
+  "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
+  "` || true) && `,prepareAgent,` && : >`,logPath," +
+  "`) && SSH_AUTH_SOCK=`,agentSocket,` nohup `,`spine-codex`," +
+  "` -c features.code_mode_host=true`,` app-server --listen unix://`," +
+  "` >${logPath} 2>&1 &`].join(``);";
 const patchedRemoteBootstrap = hook.patchRemoteBootstrapCleanupSource(
   remoteBootstrapSource,
 );
@@ -248,6 +261,26 @@ assert.match(
 assert.doesNotMatch(renderedForwardedAgentBootstrap, /pkill -9 -U/);
 assert.equal(
   spawnSync("/bin/sh", ["-n", "-c", renderedForwardedAgentBootstrap]).status,
+  0,
+);
+const patchedGroupedForwardedAgentBootstrap =
+  hook.patchRemoteBootstrapCleanupSource(groupedForwardedAgentBootstrapSource);
+const renderedGroupedForwardedAgentBootstrap = new Function(
+  "cli",
+  `${patchedGroupedForwardedAgentBootstrap}; return command;`,
+)("spine-codex");
+assert.match(
+  renderedGroupedForwardedAgentBootstrap,
+  /umask 077; mkdir -p "\$control_dir" \|\| exit \$\?;/,
+);
+assert.match(
+  renderedGroupedForwardedAgentBootstrap,
+  /prepare-forwarded-agent && SSH_AUTH_SOCK=\/tmp\/forwarded-ssh-agent\.sock nohup sh -c/,
+);
+assert.doesNotMatch(renderedGroupedForwardedAgentBootstrap, /pkill -9 -U/);
+assert.equal(
+  spawnSync("/bin/sh", ["-n", "-c", renderedGroupedForwardedAgentBootstrap])
+    .status,
   0,
 );
 assert.throws(

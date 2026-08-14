@@ -1,7 +1,7 @@
 {
   "name": "spine-codex-app",
   "version": "0.2.2",
-  "spineAppVersion": "0.2.2.4",
+  "spineAppVersion": "0.2.2.5",
   "spineCodexVersion": "0.2.2",
   "private": true,
   "description": "A lightweight launcher that adds SpineCodex controls and Spine Tree UI to Codex Desktop.",

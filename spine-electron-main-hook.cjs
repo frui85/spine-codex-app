@@ -74,6 +74,7 @@ function remoteSpineIdentitySource() {
 function remoteBootstrapPrefixSource({
   forwardedAgentSetupVariable = null,
   forwardedAgentSocketVariable = null,
+  standalone = false,
 } = {}) {
   const forwardedAgentSource =
     forwardedAgentSetupVariable != null &&
@@ -82,8 +83,9 @@ function remoteBootstrapPrefixSource({
         ",` && SSH_AUTH_SOCK=`," + forwardedAgentSocketVariable + ",` "
       : "";
   return [
-    "` || exit $?; ",
+    standalone ? "`" : "` || exit $?; ",
     "control_dir=\"\\${CODEX_HOME:-$HOME/.codex}/app-server-control\"; ",
+    standalone ? "umask 077; mkdir -p \"$control_dir\" || exit $?; " : "",
     "control_socket=\"$control_dir/app-server-control.sock\"; ",
     "lock_dir=\"$control_dir/spine-codex-bootstrap.lock\"; current_uid=$(id -u); ",
     "lock_attempt=0; while ! mkdir \"$lock_dir\" 2>/dev/null; do ",
@@ -159,6 +161,25 @@ function patchRemoteBootstrapCleanupSource(source) {
         remoteBootstrapPrefixSource({
           forwardedAgentSetupVariable,
           forwardedAgentSocketVariable,
+        }),
+    },
+    {
+      // Codex 26.810+ groups directory creation, stale cleanup, forwarded-agent
+      // setup, and log initialization before launch. Replace the complete
+      // group so the injected shell does not inherit an unmatched subshell.
+      pattern:
+        /`\(umask 077; mkdir -p -- `,([A-Za-z_$][\w$]*),` && \(pkill[^,]+`,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && `,([A-Za-z_$][\w$]*),` && : >`,([A-Za-z_$][\w$]*),`\) && SSH_AUTH_SOCK=`,([A-Za-z_$][\w$]*),` nohup `/g,
+      replacement: (
+        _,
+        _controlDirectoryVariable,
+        forwardedAgentSetupVariable,
+        _logPathVariable,
+        forwardedAgentSocketVariable,
+      ) =>
+        remoteBootstrapPrefixSource({
+          forwardedAgentSetupVariable,
+          forwardedAgentSocketVariable,
+          standalone: true,
         }),
     },
   ];

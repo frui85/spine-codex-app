@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+## v0.2.2.5 — 2026-08-14
+
+Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
+
+- Supports the grouped SSH app-server bootstrap structure introduced in
+  ChatGPT Desktop `26.810.41047`, including its secure directory setup,
+  forwarded SSH-agent preparation, and log initialization.
+- Replaces the complete grouped cleanup expression before injecting the
+  SpineCodex bootstrap, preventing unmatched shell subshells while retaining
+  fail-closed compatibility checks for unknown bundles.
+
 ## v0.2.2.4 — 2026-08-11
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.
