@@ -327,6 +327,12 @@ assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
 assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_PATH:/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_SHA256:/);
+assert.match(wrapperSource, /SPINE_CODEX_LOCAL_IDENTITY_JSON/);
+assert.match(wrapperSource, /prependRendererIdentity\(RENDERER_SOURCE, localIdentityJson\)/);
+assert.match(
+  wrapperSource,
+  /createHash\("sha256"\)\.update\(RENDERER_SOURCE\)\.digest\("hex"\)/,
+);
 assert.match(wrapperSource, /SPINE_CODEX_SHIM_NODE: process\.execPath/);
 assert.match(
   wrapperSource,
@@ -370,9 +376,24 @@ const rendererSha256 = createHash("sha256").update(rendererSource).digest("hex")
 const rendererPayload = hook.loadRendererPayload({
   rendererPath: fileURLToPath(rendererPath),
   rendererSha256,
+  localIdentity: null,
 });
 assert.equal(rendererPayload.sha256, rendererSha256);
 assert.equal(rendererPayload.source, rendererSource);
+const identityPayload = hook.loadRendererPayload({
+  rendererPath: fileURLToPath(rendererPath),
+  rendererSha256,
+  localIdentity: JSON.stringify({
+    mode: "dual",
+    productVersion: "0.3.2",
+    compatibilityVersion: "0.147.0",
+  }),
+});
+assert.equal(identityPayload.sha256, rendererSha256);
+assert.match(identityPayload.source, /^Object\.defineProperty\(globalThis/);
+assert.match(identityPayload.source, /__spineCodexLocalIdentityV1/);
+assert.match(identityPayload.source, /"productVersion":"0\.3\.2"/);
+assert.equal(identityPayload.source.endsWith(rendererSource), true);
 assert.throws(
   () => hook.loadRendererPayload({
     rendererPath: fileURLToPath(rendererPath),
@@ -409,6 +430,21 @@ const recoverySourceTwo = recoverySourceOne.replace(
   "RENDERER_REVISION=1",
   "RENDERER_REVISION=2",
 );
+await writeFile(recoveryRenderer, recoverySourceOne);
+const recoveryIdentityPayload = hook.loadRendererPayload({
+  rendererPath: recoveryRenderer,
+  rendererSha256: createHash("sha256").update(recoverySourceOne).digest("hex"),
+  localIdentity: {
+    mode: "dual",
+    productVersion: "0.3.2",
+    compatibilityVersion: "0.147.0",
+  },
+});
+await writeFile(recoveryRenderer, recoverySourceTwo);
+const reloadedIdentityPayload = hook.reloadRendererPayload(recoveryIdentityPayload);
+assert.match(reloadedIdentityPayload.source, /__spineCodexLocalIdentityV1/);
+assert.match(reloadedIdentityPayload.source, /"compatibilityVersion":"0\.147\.0"/);
+assert.equal(reloadedIdentityPayload.source.endsWith(recoverySourceTwo), true);
 await writeFile(recoveryRenderer, recoverySourceOne);
 const recovery = hook.installRendererRecovery({
   payload: hook.loadRendererPayload({

@@ -13,6 +13,10 @@ const disabledWindowsWorkflow = await readFile(
   new URL(".github/workflows/windows-release.yml.disabled", root),
   "utf8",
 );
+const releaseNotes = await readFile(
+  new URL("docs/RELEASE_NOTES_v0.3.2.0.md", root),
+  "utf8",
+);
 const validator = fileURLToPath(
   new URL("../scripts/validate-release-tag.mjs", import.meta.url),
 );
@@ -24,22 +28,25 @@ function validate(tag) {
 }
 
 test("release tag must match the wrapper source version", () => {
-  const accepted = validate("v0.2.2.5");
+  const accepted = validate("v0.3.2.0");
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(accepted.stdout.trim(), "0.2.2.5");
+  assert.equal(accepted.stdout.trim(), "0.3.2.0");
 
-  const rejected = validate("v0.2.2");
+  const rejected = validate("v0.3.2");
   assert.notEqual(rejected.status, 0);
-  assert.match(rejected.stderr, /does not match source version v0\.2\.2\.5/);
+  assert.match(rejected.stderr, /does not match source version v0\.3\.2\.0/);
 });
 
 test("active release workflow is tag-driven and publishes macOS only", () => {
   assert.match(releaseWorkflow, /tags: \["v\*"\]/);
   assert.match(releaseWorkflow, /validate-release-tag\.mjs/);
   assert.match(releaseWorkflow, /build-macos-release\.mjs --all --version/);
+  assert.match(releaseWorkflow, /docs\/RELEASE_NOTES_v\$\{VERSION\}\.md/);
   assert.match(releaseWorkflow, /gh release create .*--draft/);
   assert.match(releaseWorkflow, /gh release edit[\s\S]*--draft=false --latest/);
   assert.doesNotMatch(releaseWorkflow, /build-windows-release|windows-x64/);
+  assert.match(releaseNotes, /^# SpineCodex App v0\.3\.2\.0/m);
+  assert.match(releaseNotes, /SpineCodex recommended baseline \| 0\.3\.2/);
 });
 
 test("Windows workflow is complete but ignored by GitHub Actions", () => {

@@ -1,0 +1,769 @@
+  function settingsCopy() {
+    return {
+      title: t("settings.title"),
+      loading: t("settings.loading"),
+      saving: t("settings.saving"),
+      saved: t("settings.saved"),
+      unavailable: t("settings.unavailable"),
+      error: t("settings.error"),
+      retry: t("settings.retry"),
+      appliesToNew: t("settings.applies"),
+    };
+  }
+
+  function humanizeFeatureName(name) {
+    return String(name)
+      .split("_")
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ");
+  }
+
+  function featureCopy(feature) {
+    const copy = settingsCopy();
+    const labelKey = `feature.${feature.name}.label`;
+    const descriptionKey = `feature.${feature.name}.description`;
+    const knownLabel = messageTemplate(labelKey);
+    const knownDescription = messageTemplate(descriptionKey);
+    const label = knownLabel !== labelKey
+      ? knownLabel
+      : feature.displayName ?? humanizeFeatureName(feature.name);
+    const rawDescription = knownDescription !== descriptionKey
+      ? knownDescription
+      : feature.description ?? "";
+    const description = rawDescription
+      ? `${rawDescription.replace(/\s+$/, "")} ${copy.appliesToNew}`
+      : copy.appliesToNew;
+    return {
+      label,
+      description,
+      toggle: t("settings.toggle", { label }),
+    };
+  }
+
+  function isSpineSettingsFeature(feature) {
+    return (
+      typeof feature.name === "string" &&
+      feature.name.length <= 80 &&
+      /^[a-z][a-z0-9_]*$/.test(feature.name) &&
+      SPINE_FEATURE_PREFIX.test(feature.name) &&
+      (
+        feature.stage === "beta" ||
+        (
+          feature.stage === "stable" &&
+          SPINE_STABLE_SETTINGS_FEATURES.has(feature.name)
+        )
+      )
+    );
+  }
+
+  function selectSpineSettingsFeatures(features) {
+    const priority = new Map([
+      ["spine_jit", 0],
+      ["spine_trim", 1],
+      ["spine_spawn", 2],
+      ["spinetree_memory_projection", 3],
+    ]);
+    return (Array.isArray(features) ? features : [])
+      .filter(isSpineSettingsFeature)
+      .sort((left, right) =>
+        (priority.get(left.name) ?? 100) - (priority.get(right.name) ?? 100) ||
+        left.name.localeCompare(right.name),
+      )
+      .map((feature) => ({
+        name: feature.name,
+        stage: feature.stage,
+        displayName: typeof feature.displayName === "string"
+          ? feature.displayName.slice(0, 160)
+          : null,
+        description: typeof feature.description === "string"
+          ? feature.description.slice(0, 1_000)
+          : null,
+        enabled: feature.enabled === true,
+        defaultEnabled: feature.defaultEnabled === true,
+      }));
+  }
+
+  function validSettingsVersion(value) {
+    return typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)
+      ? value
+      : null;
+  }
+
+  function localSettingsIdentity() {
+    const identity = globalThis[LOCAL_IDENTITY_GLOBAL];
+    if (!identity || typeof identity !== "object") {
+      return { productVersion: null, compatibilityVersion: null };
+    }
+    return {
+      productVersion: validSettingsVersion(identity.productVersion),
+      compatibilityVersion: validSettingsVersion(identity.compatibilityVersion),
+    };
+  }
+
+  function settingsStatusModel(hostId, features = state.settingsFeatures) {
+    const normalizedHostId = typeof hostId === "string" && hostId
+      ? hostId.slice(0, 256)
+      : "local";
+    const selected = features instanceof Map
+      ? features
+      : new Map(
+          selectSpineSettingsFeatures(features)
+            .map((feature) => [feature.name, feature]),
+        );
+    const spawn = selected.get("spine_spawn");
+    const memory = selected.get("spinetree_memory_projection");
+    const identity = normalizedHostId === "local"
+      ? localSettingsIdentity()
+      : { productVersion: null, compatibilityVersion: null };
+    return {
+      hostId: normalizedHostId,
+      productVersion: identity.productVersion,
+      compatibilityVersion: identity.compatibilityVersion,
+      spawnDefaultEnabled: spawn ? spawn.defaultEnabled === true : null,
+      spawnEnabled: spawn ? spawn.enabled === true : null,
+      memoryProjectionEnabled: memory ? memory.enabled === true : null,
+    };
+  }
+
+  function settingsHostLabel(hostId) {
+    if (hostId === "local") return t("host.local");
+    return hostId.split(":").pop()?.trim() || hostId;
+  }
+
+  function settingsBooleanLabel(value) {
+    return value == null
+      ? t("settings.notAvailable")
+      : t(value ? "settings.on" : "settings.off");
+  }
+
+  function settingsIdentityText(status) {
+    return t("settings.hostIdentity", {
+      host: settingsHostLabel(status.hostId),
+      product: status.productVersion ?? t("settings.notReported"),
+      compatibility:
+        status.compatibilityVersion ?? t("settings.notReported"),
+    });
+  }
+
+  function settingsFeatureStatusText(status) {
+    return t("settings.featureStatus", {
+      spawn: settingsBooleanLabel(status.spawnDefaultEnabled),
+      memory: settingsBooleanLabel(status.memoryProjectionEnabled),
+    });
+  }
+
+  function activeAgentSettingsPanel() {
+    return document.querySelector?.(
+      'button[data-settings-panel-slug="agent"][aria-current="page"]',
+    ) ?? null;
+  }
+
+  function findModelFeaturesSection() {
+    if (!activeAgentSettingsPanel() || typeof document.querySelectorAll !== "function") {
+      return null;
+    }
+    const sections = [...document.querySelectorAll("section")].filter((section) => {
+      if (section.id === SETTINGS_SECTION_ID || !section.isConnected) return false;
+      const rect = section.getBoundingClientRect?.();
+      return rect && rect.width >= 450 && rect.height > 0;
+    });
+    return sections.find((section) =>
+      Boolean(section.querySelector?.('button[role="switch"][aria-label*="Ultra" i]'))) ??
+      null;
+  }
+
+  function activeThreadHostId() {
+    const selected = document.querySelector?.(
+      '[data-app-action-sidebar-thread-active="true"], ' +
+      '[data-app-action-sidebar-thread-id][aria-current="page"]',
+    );
+    const hostId = (
+      selected?.getAttribute("data-app-action-sidebar-thread-host-id") ??
+      selectedSidebarItem()?.getAttribute("data-app-action-sidebar-thread-host-id") ??
+      null
+    );
+    if (hostId) state.lastActiveHostId = hostId;
+    return hostId ?? state.lastActiveHostId;
+  }
+
+  function hostIdForLabel(label) {
+    const normalized = label?.trim().toLowerCase();
+    if (!normalized) return null;
+    const localLabels = new Set(
+      Object.keys(UI_MESSAGES).map((locale) =>
+        messageTemplate("host.local", locale).toLocaleLowerCase(locale)),
+    );
+    if (localLabels.has(normalized)) return "local";
+    return state.hostIds.find((hostId) => {
+      const suffix = hostId.split(":").pop()?.trim().toLowerCase();
+      return normalized === hostId.toLowerCase() || normalized === suffix;
+    }) ?? null;
+  }
+
+  function selectedSettingsHostId(modelSection = state.settingsModelSection) {
+    const modelRect = modelSection?.getBoundingClientRect?.();
+    if (modelRect && typeof document.querySelectorAll === "function") {
+      const candidates = [...document.querySelectorAll("button")]
+        .map((button) => {
+          if (button.closest?.("[data-app-action-sidebar-thread-id]")) return null;
+          const hostId = hostIdForLabel(button.textContent);
+          if (!hostId) return null;
+          const rect = button.getBoundingClientRect?.();
+          const isHostMenu = button.getAttribute?.("aria-haspopup") === "menu";
+          if (
+            !rect ||
+            rect.width <= 0 ||
+            rect.height <= 0 ||
+            (rect.x < modelRect.x - 280 && !isHostMenu) ||
+            rect.y > modelRect.y
+          ) {
+            return null;
+          }
+          return { hostId, isHostMenu, x: rect.x, y: rect.y };
+        })
+        .filter(Boolean)
+        .sort((left, right) =>
+          Number(right.isHostMenu) - Number(left.isHostMenu) ||
+          right.x - left.x ||
+          left.y - right.y,
+        );
+      if (candidates[0]) return candidates[0].hostId;
+    }
+    const active = activeThreadHostId();
+    return active && state.hostIds.includes(active) ? active : active ?? "local";
+  }
+
+  async function loadHostCatalog() {
+    if (state.hostCatalogLoaded) return;
+    state.hostCatalogLoaded = true;
+    try {
+      const bootstrap = await window.electronBridge?.getInitialSidebarBootstrap?.();
+      const snapshot =
+        bootstrap?.catalogSnapshot ??
+        bootstrap?.catalog_snapshot ??
+        bootstrap;
+      const hosts = snapshot?.hosts ?? bootstrap?.hosts ?? [];
+      const ids = hosts
+        .map((host) => host?.hostId ?? host?.host_id)
+        .filter((hostId) => typeof hostId === "string" && hostId);
+      state.hostIds = [...new Set(["local", ...ids])];
+      scheduleSettingsMount(8);
+    } catch {}
+  }
+
+  function settleAppServerResponse(data) {
+    if (data?.type !== "mcp-response") return false;
+    const response = data.message ?? data.response;
+    const requestId = response?.id == null ? null : String(response.id);
+    const pending = requestId ? state.pendingRequests.get(requestId) : null;
+    if (!pending) return false;
+    state.pendingRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (response.error) {
+      pending.reject(new Error(
+        response.error.message ?? `App Server request failed (${response.error.code ?? "unknown"})`,
+      ));
+    } else {
+      pending.resolve(response.result);
+    }
+    return true;
+  }
+
+  function settleCodexFetchResponse(data) {
+    if (data?.type !== "fetch-response") return false;
+    const requestId = data.requestId == null ? null : String(data.requestId);
+    const pending = requestId ? state.pendingFetchRequests.get(requestId) : null;
+    if (!pending) return false;
+    state.pendingFetchRequests.delete(requestId);
+    clearTimeout(pending.timeout);
+    if (data.responseType === "error" || data.error) {
+      pending.reject(new Error(data.error ?? `Codex request failed (${data.status ?? "unknown"})`));
+      return true;
+    }
+    try {
+      pending.resolve(JSON.parse(data.bodyJsonString || "null"));
+    } catch (error) {
+      pending.reject(error);
+    }
+    return true;
+  }
+
+  function sendCodexFetchRequest(method, body) {
+    const bridge = window.electronBridge;
+    if (typeof bridge?.sendMessageFromView !== "function") {
+      return Promise.reject(new Error("Codex renderer bridge is unavailable"));
+    }
+    const requestId = `spine-codex-fetch-${Date.now()}-${++state.requestSequence}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        state.pendingFetchRequests.delete(requestId);
+        reject(new Error(`${method} timed out`));
+      }, 5_000);
+      state.pendingFetchRequests.set(requestId, { resolve, reject, timeout });
+      Promise.resolve(bridge.sendMessageFromView({
+        type: "fetch",
+        requestId,
+        method: "POST",
+        url: `vscode://codex/${method}`,
+        body: JSON.stringify(body ?? {}),
+      })).catch((error) => {
+        const pending = state.pendingFetchRequests.get(requestId);
+        if (!pending) return;
+        state.pendingFetchRequests.delete(requestId);
+        clearTimeout(pending.timeout);
+        reject(error);
+      });
+    });
+  }
+
+  async function syncLocaleSetting() {
+    if (state.localeSyncInFlight || state.destroyed) return false;
+    state.localeSyncInFlight = true;
+    try {
+      const result = await sendCodexFetchRequest("get-setting", {
+        key: "localeOverride",
+      });
+      return applyLocaleSetting(result?.value ?? null);
+    } catch {
+      return false;
+    } finally {
+      state.localeSyncInFlight = false;
+    }
+  }
+
+  function scheduleLocaleSettingSync(delay = 0) {
+    if (state.destroyed) return;
+    if (state.localeSyncTimer) clearTimeout(state.localeSyncTimer);
+    state.localeSyncTimer = setTimeout(() => {
+      state.localeSyncTimer = 0;
+      void syncLocaleSetting();
+    }, Math.max(0, delay));
+  }
+
+  function sendAppServerRequest(hostId, method, params) {
+    const bridge = window.electronBridge;
+    if (typeof bridge?.sendMessageFromView !== "function") {
+      return Promise.reject(new Error("Codex App Server bridge is unavailable"));
+    }
+    const requestId = `spine-codex-settings-${Date.now()}-${++state.requestSequence}`;
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        state.pendingRequests.delete(requestId);
+        reject(new Error(`${method} timed out`));
+      }, 7_000);
+      state.pendingRequests.set(requestId, { resolve, reject, timeout });
+      Promise.resolve(bridge.sendMessageFromView({
+        type: "mcp-request",
+        hostId,
+        request: {
+          jsonrpc: "2.0",
+          id: requestId,
+          method,
+          params,
+        },
+      })).catch((error) => {
+        const pending = state.pendingRequests.get(requestId);
+        if (!pending) return;
+        state.pendingRequests.delete(requestId);
+        clearTimeout(pending.timeout);
+        reject(error);
+      });
+    });
+  }
+
+  function createElement(tagName, className, text) {
+    const element = document.createElement(tagName);
+    if (className) element.className = className;
+    if (text != null) element.textContent = text;
+    return element;
+  }
+
+  function createSettingsSection(modelSection) {
+    state.settingsSection?.remove?.();
+    const copy = settingsCopy();
+    const section = createElement("section", modelSection.className || "flex flex-col");
+    section.id = SETTINGS_SECTION_ID;
+    section.dataset.spineCodexSettings = VERSION;
+    section.style.contain = "layout style";
+
+    const header = createElement(
+      "div",
+      "pb-1.5 flex min-h-toolbar items-center justify-between gap-4",
+    );
+    const headerStack = createElement("div", "flex min-w-0 flex-1 flex-col gap-0.5");
+    const title = createElement(
+      "div",
+      "font-medium text-token-text-primary text-base",
+      copy.title,
+    );
+    const hostStatus = createElement(
+      "div",
+      "min-w-0 break-words text-xs leading-4 text-token-text-secondary",
+    );
+    hostStatus.dataset.spineSettingsHostStatus = "true";
+    const featureStatus = createElement(
+      "div",
+      "min-w-0 break-words text-xs leading-4 text-token-text-tertiary",
+    );
+    featureStatus.dataset.spineSettingsFeatureStatus = "true";
+    headerStack.append(title, hostStatus, featureStatus);
+    header.append(headerStack);
+
+    const content = createElement("div", "flex flex-col gap-1.5");
+    const card = createElement(
+      "div",
+      "flex flex-col [&>*:not(:last-child)]:relative " +
+      "[&>*:not(:last-child)]:after:pointer-events-none " +
+      "[&>*:not(:last-child)]:after:absolute " +
+      "[&>*:not(:last-child)]:after:inset-x-4 " +
+      "[&>*:not(:last-child)]:after:bottom-0 " +
+      "[&>*:not(:last-child)]:after:h-[0.5px] " +
+      "[&>*:not(:last-child)]:after:bg-token-border " +
+      "[&>*:not(:last-child)]:after:content-[''] " +
+      "overflow-hidden rounded-2xl border border-token-border",
+    );
+    card.style.backgroundColor =
+      "var(--color-background-panel, var(--color-token-bg-fog))";
+    content.append(card);
+    section.append(header, content);
+    modelSection.after(section);
+
+    state.settingsSection = section;
+    state.settingsModelSection = modelSection;
+    state.settingsLoadedHostId = null;
+    state.settingsError = null;
+    state.settingsSavedFeature = null;
+    state.settingsUi = {
+      title,
+      hostStatus,
+      featureStatus,
+      card,
+    };
+    renderSettings();
+    return section;
+  }
+
+  function createSettingsStatusRow(text, retryable = false) {
+    const copy = settingsCopy();
+    const row = createElement(
+      "div",
+      "flex min-h-[52px] items-center justify-between px-4 gap-6 py-3",
+    );
+    const message = createElement(
+      "div",
+      "min-w-0 text-xs leading-4 text-balance text-token-text-secondary",
+      text,
+    );
+    row.append(message);
+    if (retryable) {
+      const retry = createElement(
+        "button",
+        "border-token-border no-drag cursor-interaction items-center gap-1 border " +
+        "whitespace-nowrap select-none focus:outline-none disabled:cursor-not-allowed " +
+        "disabled:opacity-40 flex rounded-lg text-token-foreground " +
+        "bg-token-foreground/5 enabled:hover:bg-token-foreground/10 " +
+        "enabled:active:bg-token-foreground/15 border-transparent " +
+        "h-token-button-composer px-2 py-0 text-base leading-[18px]",
+        copy.retry,
+      );
+      retry.type = "button";
+      retry.addEventListener("click", () => readSpineSettings(
+        selectedSettingsHostId(state.settingsModelSection),
+        true,
+      ));
+      row.append(retry);
+    }
+    return row;
+  }
+
+  function createSettingsFeatureRow(feature) {
+    const copy = settingsCopy();
+    const featureText = featureCopy(feature);
+    const row = createElement(
+      "div",
+      "flex items-center justify-between px-4 gap-6 py-3",
+    );
+    row.dataset.spineFeatureName = feature.name;
+    const labelGroup = createElement("div", "flex min-w-0 flex-1 items-center gap-3");
+    const labelStack = createElement("div", "flex min-w-0 flex-col gap-0.5");
+    const label = createElement(
+      "div",
+      "min-w-0 text-token-text-primary text-sm font-medium",
+      featureText.label,
+    );
+    let descriptionText = featureText.description;
+    if (state.settingsSavingFeature === feature.name) descriptionText = copy.saving;
+    else if (state.settingsSavedFeature === feature.name) descriptionText = copy.saved;
+    const description = createElement(
+      "div",
+      "min-w-0 text-xs leading-4 text-balance text-token-text-secondary",
+      descriptionText,
+    );
+    labelStack.append(label, description);
+    labelGroup.append(labelStack);
+
+    const control = createElement("div", "flex max-w-full shrink-0 items-center gap-2");
+    const toggle = createElement(
+      "button",
+      "inline-flex items-center text-sm focus-visible:outline-none " +
+      "focus-visible:ring-2 focus-visible:ring-token-focus-border " +
+      "focus-visible:rounded-full cursor-interaction",
+    );
+    toggle.type = "button";
+    toggle.setAttribute("role", "switch");
+    toggle.setAttribute("aria-label", featureText.toggle);
+    toggle.setAttribute("aria-checked", String(feature.enabled));
+    toggle.dataset.state = feature.enabled ? "checked" : "unchecked";
+    toggle.disabled = state.settingsLoading || state.settingsSaving;
+    if (state.settingsSavingFeature === feature.name) {
+      toggle.setAttribute("aria-busy", "true");
+    }
+    const track = createElement(
+      "span",
+      "relative inline-flex shrink-0 items-center rounded-full transition-colors " +
+      `duration-basic ease-out ${
+        feature.enabled ? "bg-token-charts-blue" : "bg-token-foreground/10"
+      } h-5 w-8`,
+    );
+    track.dataset.state = feature.enabled ? "checked" : "unchecked";
+    const thumb = createElement(
+      "span",
+      "rounded-full border border-[color:var(--gray-0)] bg-[color:var(--gray-0)] " +
+      "shadow-sm transition-transform duration-basic ease-out " +
+      "data-[state=unchecked]:translate-x-0 h-4 w-4 " +
+      "data-[state=unchecked]:translate-x-[2px] " +
+      "data-[state=checked]:translate-x-[14px]",
+    );
+    thumb.dataset.state = feature.enabled ? "checked" : "unchecked";
+    track.append(thumb);
+    toggle.append(track);
+    toggle.addEventListener("click", () => {
+      const current = state.settingsFeatures.get(feature.name);
+      if (!current || state.settingsLoading || state.settingsSaving) return;
+      writeSpineFeature(feature.name, !current.enabled);
+    });
+    control.append(toggle);
+    row.append(labelGroup, control);
+    return row;
+  }
+
+  function renderSettings() {
+    const ui = state.settingsUi;
+    if (!ui || !state.settingsSection?.isConnected) return;
+    const copy = settingsCopy();
+    ui.title.textContent = copy.title;
+    const status = settingsStatusModel(state.settingsHostId ?? "local");
+    ui.hostStatus.textContent = settingsIdentityText(status);
+    ui.hostStatus.title = status.hostId;
+    ui.featureStatus.textContent = settingsFeatureStatusText(status);
+    let rows;
+    if (state.settingsLoading) rows = [createSettingsStatusRow(copy.loading)];
+    else if (state.settingsError) rows = [createSettingsStatusRow(copy.error, true)];
+    else if (!state.settingsAvailable) rows = [createSettingsStatusRow(copy.unavailable)];
+    else rows = [...state.settingsFeatures.values()].map(createSettingsFeatureRow);
+    ui.card.replaceChildren(...rows);
+  }
+
+  async function listExperimentalFeatures(hostId) {
+    const features = [];
+    let cursor = null;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await sendAppServerRequest(
+        hostId,
+        "experimentalFeature/list",
+        cursor ? { limit: 100, cursor } : { limit: 100 },
+      );
+      if (Array.isArray(result?.data)) features.push(...result.data);
+      cursor = typeof result?.nextCursor === "string" && result.nextCursor
+        ? result.nextCursor
+        : null;
+      if (!cursor) break;
+    }
+    return features;
+  }
+
+  async function readSpineSettings(hostId, force = false) {
+    if (!hostId || state.destroyed) return;
+    if (
+      !force &&
+      state.settingsLoadedHostId === hostId &&
+      !state.settingsError
+    ) {
+      renderSettings();
+      return;
+    }
+    const epoch = ++state.settingsRequestEpoch;
+    if (state.settingsLoadedHostId !== hostId) {
+      state.settingsFeatures = new Map();
+      state.settingsAvailable = false;
+      state.settingsLoadedHostId = null;
+    }
+    state.settingsHostId = hostId;
+    state.settingsLoading = true;
+    state.settingsError = null;
+    state.settingsSavedFeature = null;
+    renderSettings();
+    try {
+      const features = selectSpineSettingsFeatures(
+        await listExperimentalFeatures(hostId),
+      );
+      if (state.destroyed || epoch !== state.settingsRequestEpoch) return;
+      state.settingsFeatures = new Map(
+        features.map((feature) => [feature.name, feature]),
+      );
+      state.settingsAvailable = features.length > 0;
+      state.settingsLoadedHostId = hostId;
+    } catch (error) {
+      if (state.destroyed || epoch !== state.settingsRequestEpoch) return;
+      state.settingsAvailable = false;
+      state.settingsFeatures = new Map();
+      state.settingsError = error;
+    } finally {
+      if (!state.destroyed && epoch === state.settingsRequestEpoch) {
+        state.settingsLoading = false;
+        renderSettings();
+      }
+    }
+  }
+
+  async function writeSpineFeature(featureName, enabled) {
+    const hostId = state.settingsHostId ?? selectedSettingsHostId();
+    const feature = state.settingsFeatures.get(featureName);
+    if (
+      !hostId ||
+      state.settingsSaving ||
+      !isSpineSettingsFeature(feature) ||
+      state.destroyed
+    ) {
+      return;
+    }
+    const previous = feature.enabled;
+    const epoch = ++state.settingsRequestEpoch;
+    state.settingsFeatures.set(featureName, {
+      ...feature,
+      enabled: Boolean(enabled),
+    });
+    state.settingsSaving = true;
+    state.settingsSavingFeature = featureName;
+    state.settingsError = null;
+    state.settingsSavedFeature = null;
+    renderSettings();
+    try {
+      await sendAppServerRequest(hostId, "config/batchWrite", {
+        edits: [{
+          keyPath: `features.${featureName}`,
+          value: Boolean(enabled),
+          mergeStrategy: "upsert",
+        }],
+        filePath: null,
+        expectedVersion: null,
+        reloadUserConfig: false,
+      });
+      if (state.destroyed || epoch !== state.settingsRequestEpoch) return;
+      state.settingsLoadedHostId = hostId;
+      state.settingsSavedFeature = featureName;
+      if (state.settingsSavedTimer) clearTimeout(state.settingsSavedTimer);
+      state.settingsSavedTimer = setTimeout(() => {
+        state.settingsSavedTimer = 0;
+        state.settingsSavedFeature = null;
+        renderSettings();
+      }, 2_500);
+    } catch (error) {
+      if (state.destroyed || epoch !== state.settingsRequestEpoch) return;
+      state.settingsFeatures.set(featureName, {
+        ...feature,
+        enabled: previous,
+      });
+      state.settingsError = error;
+    } finally {
+      if (!state.destroyed && epoch === state.settingsRequestEpoch) {
+        state.settingsSaving = false;
+        state.settingsSavingFeature = null;
+        renderSettings();
+        scheduleSettingsMount(4);
+      }
+    }
+  }
+
+  function mountSettings() {
+    if (!document.body || state.destroyed) return false;
+    if (!activeAgentSettingsPanel()) {
+      if (state.settingsSection?.isConnected) state.settingsSection.remove();
+      state.settingsSection = null;
+      state.settingsModelSection = null;
+      state.settingsUi = null;
+      state.settingsLoadedHostId = null;
+      return false;
+    }
+    const modelSection = findModelFeaturesSection();
+    if (!modelSection) return false;
+    if (
+      !state.settingsSection?.isConnected ||
+      state.settingsSection.previousElementSibling !== modelSection
+    ) {
+      createSettingsSection(modelSection);
+    } else {
+      state.settingsModelSection = modelSection;
+    }
+    const hostId = selectedSettingsHostId(modelSection);
+    if (
+      hostId !== state.settingsLoadedHostId &&
+      !state.settingsLoading &&
+      !state.settingsSaving
+    ) {
+      readSpineSettings(hostId);
+    }
+    return true;
+  }
+
+  function scheduleSettingsMount(attempts = 18) {
+    if (state.destroyed || !document.body) return;
+    state.settingsAttempts = Math.max(state.settingsAttempts, attempts);
+    if (state.settingsFrame) return;
+    const attempt = () => {
+      state.settingsFrame = 0;
+      if (mountSettings()) {
+        state.settingsAttempts = 0;
+        return;
+      }
+      state.settingsAttempts -= 1;
+      if (state.settingsAttempts > 0) {
+        state.settingsFrame = requestAnimationFrame(attempt);
+      }
+    };
+    state.settingsFrame = requestAnimationFrame(attempt);
+  }
+
+  function maybeScheduleSettingsFromClick(target) {
+    if (!document.body) return;
+    const element = target?.nodeType === Node.ELEMENT_NODE
+      ? target
+      : target?.parentElement;
+    activeThreadHostId();
+    if (
+      activeAgentSettingsPanel() ||
+      element?.closest?.("[data-settings-panel-slug]")
+    ) {
+      scheduleSettingsMount(24);
+    }
+  }
+
+  function onKeyDown(event) {
+    if (event.key === "Escape" && state.detailRequested) {
+      event.preventDefault();
+      closeWorkspaceDetail(true, true);
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === ",") {
+      scheduleSettingsMount(30);
+    }
+    if (
+      (event.key === "Enter" || event.key === " ") &&
+      document.querySelector?.(
+        'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
+      )
+    ) {
+      scheduleLocaleSettingSync(250);
+    }
+  }

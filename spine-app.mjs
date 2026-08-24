@@ -7,10 +7,17 @@ import { homedir, release as osRelease, tmpdir } from "node:os";
 import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { inspectDesktopBundleContract } from "./lib/desktop-bundle-contract.mjs";
 import { injectMainProcessHook } from "./lib/main-inspector.mjs";
+import {
+  compareVersions,
+  inspectSpineCodexIdentity,
+  parseCliVersion,
+  probeAppsProtocol,
+} from "./lib/spine-codex-compatibility.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.2.2.5";
+const APP_VERSION = "0.3.2.0";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -19,6 +26,9 @@ const LOCAL_CLI_SHIM = join(
 const ELECTRON_MAIN_HOOK = join(HERE, "spine-electron-main-hook.cjs");
 const REMOTE_CLI_NAME = "spine-codex";
 const MIN_SPINE_CODEX_VERSION = "0.2.2";
+const RECOMMENDED_SPINE_CODEX_VERSION = "0.3.2";
+const VALIDATED_CODEX_COMPATIBILITY_VERSION = "0.147.0";
+const VALIDATED_DESKTOP_VERSIONS = ["26.810.41047", "26.818.41509"];
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
 const MIN_WINDOWS_VERSION = "10.0.17763";
@@ -43,6 +53,7 @@ Options:
   --spine-codex PATH  SpineCodex binary (default: resolve from PATH)
   --app PATH          Codex executable or macOS app bundle (default: auto-detect)
   --diagnose          Check every prerequisite without launching the app
+  --json              Emit stable JSON output with --diagnose
   -V, --version       Print the wrapper version
   -h, --help          Show this help`);
   process.exit(0);
@@ -56,7 +67,8 @@ if (args.version) {
 const diagnosis = await diagnose(args);
 
 if (args.diagnose) {
-  printDiagnosis(diagnosis);
+  if (args.json) printDiagnosisJson(diagnosis);
+  else printDiagnosis(diagnosis);
   process.exit(diagnosis.ok ? 0 : 1);
 }
 
@@ -71,8 +83,15 @@ const {
   appPath,
   versionOutput,
   commandSearchPath,
-  rendererSource: SCRIPT,
+  versionIdentity,
+  rendererSource: RENDERER_SOURCE,
 } = diagnosis;
+const localIdentityJson = JSON.stringify({
+  mode: versionIdentity.mode,
+  productVersion: versionIdentity.productVersion,
+  compatibilityVersion: versionIdentity.compatibilityVersion,
+});
+const SCRIPT = prependRendererIdentity(RENDERER_SOURCE, localIdentityJson);
 
 if (isAppRunning(appPath)) {
   fail("Codex Desktop is running. Quit it completely, then run spine-app again.");
@@ -106,8 +125,10 @@ const appEnvironment = {
   SPINE_CODEX_SHIM_NODE: process.execPath,
   SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
   SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
+  SPINE_CODEX_LOCAL_IDENTITY_JSON: localIdentityJson,
   SPINE_CODEX_RENDERER_PATH: join(HERE, "spine-view.js"),
-  SPINE_CODEX_RENDERER_SHA256: createHash("sha256").update(SCRIPT).digest("hex"),
+  SPINE_CODEX_RENDERER_SHA256:
+    createHash("sha256").update(RENDERER_SOURCE).digest("hex"),
   NODE_OPTIONS: nodeOptions,
 };
 const launchedApp = await launchCodexApp({
@@ -153,6 +174,7 @@ function parseArgs(values) {
     spineCodex: null,
     app: null,
     diagnose: false,
+    json: false,
     version: false,
     help: false,
   };
@@ -161,17 +183,27 @@ function parseArgs(values) {
     if (value === "-h" || value === "--help") parsed.help = true;
     else if (value === "-V" || value === "--version") parsed.version = true;
     else if (value === "--diagnose") parsed.diagnose = true;
+    else if (value === "--json") parsed.json = true;
     else if (value === "--spine-codex") parsed.spineCodex = requiredValue(values, ++index, value);
     else if (value === "--app") parsed.app = requiredValue(values, ++index, value);
     else if (value.startsWith("-")) fail(`unknown option: ${value}`);
     else parsed.workspace = value;
   }
+  if (parsed.json && !parsed.diagnose) fail("--json requires --diagnose");
   return parsed;
 }
 
 function requiredValue(values, index, option) {
   if (!values[index]) fail(`${option} requires a value`);
   return values[index];
+}
+
+function prependRendererIdentity(source, identityJson) {
+  return (
+    `Object.defineProperty(globalThis, "__spineCodexLocalIdentityV1", {` +
+    `value: Object.freeze(${identityJson}), configurable: true});\n` +
+    source
+  );
 }
 
 function findExecutable(name, searchPath = process.env.PATH ?? "") {
@@ -204,19 +236,6 @@ function runExecutableSync(command, commandArgs, options) {
     shell: commandScript,
     windowsHide: true,
   });
-}
-
-function parseCliVersion(output) {
-  return String(output).match(/(?:^|\s)v?(\d+\.\d+\.\d+)(?=\s|$)/)?.[1] ?? null;
-}
-
-function compareVersions(left, right) {
-  const a = left.split(".").map(Number);
-  const b = right.split(".").map(Number);
-  for (let index = 0; index < 3; index += 1) {
-    if (a[index] !== b[index]) return a[index] < b[index] ? -1 : 1;
-  }
-  return 0;
 }
 
 async function diagnose(options) {
@@ -274,6 +293,7 @@ async function diagnose(options) {
   }
 
   let rendererSource = null;
+  let rendererInfo = null;
   try {
     rendererSource = await readFile(join(HERE, "spine-view.js"), "utf8");
     await access(
@@ -281,6 +301,11 @@ async function diagnose(options) {
       process.platform === "win32" ? constants.F_OK : constants.X_OK,
     );
     await access(ELECTRON_MAIN_HOOK, constants.R_OK);
+    rendererInfo = {
+      path: join(HERE, "spine-view.js"),
+      bytes: Buffer.byteLength(rendererSource),
+      sha256: createHash("sha256").update(rendererSource).digest("hex"),
+    };
     add("ok", "Wrapper files", `${Buffer.byteLength(rendererSource)} byte renderer`);
   } catch (error) {
     add(
@@ -298,6 +323,8 @@ async function diagnose(options) {
     : await findSpineCodex(commandSearchPath);
   let spineCodex = null;
   let versionOutput = null;
+  let versionIdentity = null;
+  let appsProtocol = { mode: "not-probed", reason: null };
   if (!requestedSpineCodex) {
     add(
       "error",
@@ -324,24 +351,59 @@ async function diagnose(options) {
           SPINE_CODEX_INSTALL_COMMAND,
         );
       } else {
-        const parsed = parseCliVersion(versionOutput);
-        if (!parsed) {
+        const compatibilityVersion = parseCliVersion(versionOutput);
+        if (!compatibilityVersion) {
           add(
             "error",
             "SpineCodex",
             `could not parse version output: ${versionOutput || "(empty)"}`,
             SPINE_CODEX_INSTALL_COMMAND,
           );
-        } else if (compareVersions(parsed, MIN_SPINE_CODEX_VERSION) < 0) {
-          add(
-            "error",
-            "SpineCodex",
-            `${parsed} is older than required ${MIN_SPINE_CODEX_VERSION}`,
-            SPINE_CODEX_INSTALL_COMMAND,
-          );
         } else {
-          spineCodex = requestedSpineCodex;
-          add("ok", "SpineCodex", `${parsed} · ${requestedSpineCodex}`);
+          versionIdentity = await inspectSpineCodexIdentity(
+            requestedSpineCodex,
+            compatibilityVersion,
+          );
+          const candidateVersion = versionIdentity.productVersion;
+          const accepted = candidateVersion
+            ? compareVersions(candidateVersion, MIN_SPINE_CODEX_VERSION) >= 0
+            : compareVersions(
+                compatibilityVersion,
+                VALIDATED_CODEX_COMPATIBILITY_VERSION,
+              ) >= 0;
+          if (!accepted) {
+            const observed = candidateVersion ?? compatibilityVersion;
+            const required = candidateVersion
+              ? MIN_SPINE_CODEX_VERSION
+              : VALIDATED_CODEX_COMPATIBILITY_VERSION;
+            add(
+              "error",
+              "SpineCodex",
+              `${observed} is older than required ${required}`,
+              SPINE_CODEX_INSTALL_COMMAND,
+            );
+          } else {
+            spineCodex = requestedSpineCodex;
+            const product = versionIdentity.productVersion ?? "unknown product";
+            const detail = versionIdentity.mode === "legacy"
+              ? `${product} legacy identity · ${requestedSpineCodex}`
+              : `${product} product · Codex ${compatibilityVersion} compatibility · ${requestedSpineCodex}`;
+            add("ok", "SpineCodex", detail);
+            if (
+              versionIdentity.productVersion &&
+              compareVersions(
+                versionIdentity.productVersion,
+                RECOMMENDED_SPINE_CODEX_VERSION,
+              ) < 0
+            ) {
+              add(
+                "info",
+                "SpineCodex recommendation",
+                `${RECOMMENDED_SPINE_CODEX_VERSION} is the validated release baseline`,
+                SPINE_CODEX_INSTALL_COMMAND,
+              );
+            }
+          }
         }
       }
     } catch (error) {
@@ -354,9 +416,30 @@ async function diagnose(options) {
     }
   }
 
+  if (spineCodex && options.diagnose) {
+    appsProtocol = await probeAppsProtocol(spineCodex, {
+      searchPath: commandSearchPath,
+    });
+    if (appsProtocol.mode === "native") {
+      add("ok", "Apps protocol", "native app/installed + app/read");
+    } else if (appsProtocol.mode === "legacy-fallback") {
+      add("info", "Apps protocol", "legacy app/list adapter required");
+    } else {
+      add(
+        "error",
+        "Apps protocol",
+        appsProtocol.reason ?? "app-server is unavailable",
+        SPINE_CODEX_INSTALL_COMMAND,
+      );
+    }
+  }
+
   const appPath = options.app ? resolve(options.app) : await findApp();
   let nodeOptionsFuse = null;
   let nodeCliInspectFuse = null;
+  let desktopVersion = null;
+  let bundleContract = null;
+  let desktopValidated = false;
   if (!appPath) {
     add(
       "error",
@@ -380,6 +463,7 @@ async function diagnose(options) {
         appPath,
         NODE_CLI_INSPECT_FUSE_INDEX,
       );
+      desktopVersion = readDesktopVersion(appPath);
       if (process.platform === "win32" && nodeCliInspectFuse === "on") {
         add("ok", "Codex Desktop", appPath);
         add(
@@ -420,6 +504,7 @@ async function diagnose(options) {
           `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
         );
       }
+      desktopValidated = checks.at(-1)?.status !== "error";
     } catch (error) {
       add(
         "error",
@@ -428,6 +513,35 @@ async function diagnose(options) {
         `Pass --app with the Codex executable or app bundle, or download it from ${CODEX_DOWNLOAD_URL}`,
       );
     }
+  }
+
+  if (desktopValidated && process.platform === "darwin") {
+    try {
+      bundleContract = await inspectDesktopBundleContract(appPath, {
+        minimum: MIN_SPINE_CODEX_VERSION,
+      });
+      add(
+        "ok",
+        "Desktop bundle contract",
+        `${bundleContract.mainBundle} + ${bundleContract.versionBundle} ` +
+          "(version + CLI selector)",
+      );
+    } catch (error) {
+      bundleContract = { status: "incompatible", reason: error.message };
+      add(
+        "error",
+        "Desktop bundle contract",
+        error.message,
+        `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
+      );
+    }
+  } else if (desktopValidated) {
+    bundleContract = { status: "runtime-required", reason: null };
+    add(
+      "info",
+      "Desktop bundle contract",
+      "runtime main-process handshake required on Windows",
+    );
   }
 
   add("info", "Remote requirement", `${REMOTE_CLI_NAME} >= ${MIN_SPINE_CODEX_VERSION} on each SSH host`);
@@ -440,8 +554,13 @@ async function diagnose(options) {
     appPath,
     nodeOptionsFuse,
     nodeCliInspectFuse,
+    desktopVersion,
+    bundleContract,
     versionOutput,
+    versionIdentity,
+    appsProtocol,
     rendererSource,
+    rendererInfo,
     commandSearchPath,
   };
 }
@@ -555,6 +674,69 @@ function printDiagnosis(diagnosis, { stream = process.stdout } = {}) {
       for (const line of check.remedy.split("\n")) stream.write(`  → ${line}\n`);
     }
   }
+}
+
+function printDiagnosisJson(diagnosis, { stream = process.stdout } = {}) {
+  const payload = {
+    schemaVersion: 1,
+    ok: diagnosis.ok,
+    app: { version: APP_VERSION },
+    spineCodex: {
+      path: diagnosis.spineCodex,
+      minimumVersion: MIN_SPINE_CODEX_VERSION,
+      recommendedVersion: RECOMMENDED_SPINE_CODEX_VERSION,
+      validatedCompatibilityVersion: VALIDATED_CODEX_COMPATIBILITY_VERSION,
+      mode: diagnosis.versionIdentity?.mode ?? "unavailable",
+      productVersion: diagnosis.versionIdentity?.productVersion ?? null,
+      productVersionSource:
+        diagnosis.versionIdentity?.productVersionSource ?? "unavailable",
+      productPackagePath: diagnosis.versionIdentity?.productPackagePath ?? null,
+      compatibilityVersion: diagnosis.versionIdentity?.compatibilityVersion ?? null,
+      appsProtocol: diagnosis.appsProtocol,
+    },
+    codexDesktop: {
+      path: diagnosis.appPath,
+      version: diagnosis.desktopVersion,
+      validatedVersions: VALIDATED_DESKTOP_VERSIONS,
+      validatedBuild: diagnosis.desktopVersion == null
+        ? null
+        : VALIDATED_DESKTOP_VERSIONS.includes(diagnosis.desktopVersion),
+      nodeOptionsFuse: diagnosis.nodeOptionsFuse,
+      nodeCliInspectFuse: diagnosis.nodeCliInspectFuse,
+      bundleContract: diagnosis.bundleContract,
+    },
+    renderer: diagnosis.rendererInfo,
+    remote: { minimumSpineCodexVersion: MIN_SPINE_CODEX_VERSION },
+    imageGeneration: { mode: "disabled-compatibility-workaround" },
+    checks: diagnosis.checks,
+  };
+  stream.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function readDesktopVersion(applicationPath) {
+  if (process.platform === "darwin") {
+    const result = spawnSync(
+      "/usr/bin/plutil",
+      [
+        "-extract",
+        "CFBundleShortVersionString",
+        "raw",
+        join(applicationPath, "Contents", "Info.plist"),
+      ],
+      { encoding: "utf8", timeout: 5_000 },
+    );
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  }
+  if (process.platform === "win32") {
+    const script = "(Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion";
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, applicationPath],
+      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+    );
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  }
+  return null;
 }
 
 async function findApp() {
@@ -834,6 +1016,8 @@ async function launchCodexApp({
       `SPINE_CODEX_MIN_VERSION=${appEnvironment.SPINE_CODEX_MIN_VERSION}`,
       "--env",
       `SPINE_CODEX_MAIN_HOOK_STATUS=${appEnvironment.SPINE_CODEX_MAIN_HOOK_STATUS}`,
+      "--env",
+      `SPINE_CODEX_LOCAL_IDENTITY_JSON=${appEnvironment.SPINE_CODEX_LOCAL_IDENTITY_JSON}`,
       "--env",
       `SPINE_CODEX_RENDERER_PATH=${appEnvironment.SPINE_CODEX_RENDERER_PATH}`,
       "--env",

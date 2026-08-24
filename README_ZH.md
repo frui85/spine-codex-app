@@ -12,17 +12,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.5"><img alt="Release v0.2.2.5" src="https://img.shields.io/badge/release-v0.2.2.5-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.3.2.0"><img alt="Release v0.3.2.0" src="https://img.shields.io/badge/release-v0.3.2.0-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
-  <img alt="SpineCodex 0.2.2+" src="https://img.shields.io/badge/SpineCodex-0.2.2%2B-17171B?style=flat-square">
+  <img alt="推荐 SpineCodex 0.3.2" src="https://img.shields.io/badge/SpineCodex-0.3.2%20recommended-17171B?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES_ZH.md">查看全部功能</a>
 </p>
@@ -72,7 +72,7 @@ SpineCodex 已经为长时间运行的 Codex 工作提供了真实结构：有�
 
 ## 像原生功能一样配置
 
-Spine 控件位于 Codex 的 Model features 下方。设置按主机隔离，因此本地环境与 SSH 连接环境分别保存自己的配置。
+Spine 控件位于 Codex 的 Model features 下方。设置按主机隔离，因此本地环境与 SSH 连接环境分别保存自己的配置。标题会显示本地 SpineCodex 产品版本与 Codex 兼容版本；远程主机保持独立功能状态，不复用本地版本结论。
 
 ![嵌入 Codex Model features 的 Spine 功能控件](docs/media/spine-settings.png)
 
@@ -92,7 +92,7 @@ Spine 控件位于 Codex 的 Model features 下方。设置按主机隔离，因
 
 - macOS 14 或更高版本，或者 Windows 10 build 17763 或更高版本
 - 当前版本的[包含 Codex 的 ChatGPT Desktop](https://chatgpt.com/download/)
-- SpineCodex 0.2.2 或更高版本：
+- SpineCodex 0.2.2 或更高版本；推荐并正式验证 0.3.2：
 
 ```sh
 npm install -g @spinejit/spine-codex@latest
@@ -105,8 +105,8 @@ spine-codex --version
 
 | Mac | 下载 |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.2.5-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.2.5-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v0.3.2.0-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v0.3.2.0-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-x64.dmg) |
 
 发布包只包含本包装层及其私有 Node.js 运行时。**不会打包、下载或安装 Codex Desktop 和 SpineCodex。** 如果缺少任一依赖，内置诊断会一次性报告两项要求，并且不会修改系统。
 
@@ -139,7 +139,11 @@ Microsoft Store 构建可能忽略 `NODE_OPTIONS`，而其打包启动器也可�
 
 ```sh
 ./spine-app --diagnose
+./spine-app --diagnose --json
 ```
+
+JSON 模式稳定输出 App 版本、SpineCodex 产品与 Codex 兼容身份、Apps
+协议模式、Desktop bundle 契约、Renderer 校验和，以及本地/远程兼容要求。
 
 </details>
 
@@ -182,11 +186,13 @@ cd spine-codex-app
 <details>
 <summary><strong>构建、版本与兼容性</strong></summary>
 
-版本前三段跟踪最低支持的 SpineCodex 版本，第四段表示仅包装层修订。本版本为 **v0.2.2.5**，最低仍要求 SpineCodex 0.2.2。版本跟踪不代表本仓库重新分发 SpineCodex。
+本版本为 **v0.3.2.0**：前三段表示推荐的 SpineCodex 正式验证基线，第四段表示仅 App 修订。最低兼容线仍为 SpineCodex 0.2.2。产品版本、Codex 兼容身份与最低支持版本分别记录；版本跟踪不代表本仓库重新分发 SpineCodex。
 
 推送匹配的 `v*` tag 会启动仓库内 GitHub Actions 发布流水线。工作流先校验 tag 与 `package.json#spineAppVersion`，运行完整检查，构建并验证两个 macOS DMG，上传不可变工作流资产，最后才发布 GitHub Release。Release 会先创建为草稿，避免上传失败时暴露不完整版本。Windows 工作流代码已保留，但有意禁用。
 
-macOS 包装层已在 ChatGPT/Codex Desktop `26.727.40816`、`26.727.51351`、`26.730.61309`、`26.730.61639` 和 `26.803.41515` 上测试。Windows Store 发现与依赖预检已在真实 Windows 环境验证；新的主进程 Inspector 路径仍等待更多真机测试，因此暂未作为受支持的 GitHub Release 资产。Codex 内部结构可能变化，所以兼容性 hook 会按窄范围源码结构识别 SSH bootstrap 和版本检查器，而不是依赖生成文件名或压缩导出名；遇到未知 bundle 时会 fail closed。
+当前 bundle 契约已在 ChatGPT/Codex Desktop `26.810.41047` 与 `26.818.41509` 上验证。诊断会只读扫描已安装 macOS `app.asar`，要求主进程补丁目标唯一，并要求版本检查与 CLI selector 共同位于唯一共享 bundle；未知或歧义结构会 fail closed。Windows Store 发现与依赖预检已在真实 Windows 环境验证；主进程 Inspector 路径仍需扩大真机验证后，才会把 Windows 作为受支持的 GitHub Release 资产发布。
+
+SpineCodex 0.3.2 同时报告产品版本 `0.3.2` 与 Codex 兼容身份 `0.147.0`，App 会分别记录两者。OpenAI Codex `0.149.1` 不属于本版本的 SpineCodex 验证基线。图片生成在完成真实生成、消息回放、Tree 更新与恢复门禁前继续禁用。机器可读兼容矩阵见 [`compatibility.json`](compatibility.json)。
 
 ```sh
 npm run check

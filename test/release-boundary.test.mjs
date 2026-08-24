@@ -4,6 +4,9 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 const metadata = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
+const compatibility = JSON.parse(
+  await readFile(new URL("compatibility.json", root), "utf8"),
+);
 const launcher = await readFile(new URL("spine-app.mjs", root), "utf8");
 const renderer = await readFile(new URL("spine-view.js", root), "utf8");
 const mainHook = await readFile(
@@ -33,33 +36,73 @@ const appServerProtocolAdapter = await readFile(
   "utf8",
 );
 
-test("wrapper revision 0.2.2.5 tracks SpineCodex 0.2.2", () => {
-  assert.equal(metadata.version, "0.2.2");
-  assert.equal(metadata.spineAppVersion, "0.2.2.5");
-  assert.equal(metadata.spineCodexVersion, "0.2.2");
-  assert.match(launcher, /APP_VERSION = "0\.2\.2\.5"/);
+test("wrapper 0.3.2.0 separates minimum, recommended, and compatibility identities", () => {
+  assert.equal(metadata.version, "0.3.2");
+  assert.equal(metadata.spineAppVersion, "0.3.2.0");
+  assert.equal(metadata.minimumSpineCodexVersion, "0.2.2");
+  assert.equal(metadata.recommendedSpineCodexVersion, "0.3.2");
+  assert.equal(metadata.validatedCodexCompatibilityVersion, "0.147.0");
+  assert.deepEqual(metadata.validatedDesktopVersions, [
+    "26.810.41047",
+    "26.818.41509",
+  ]);
+  assert.match(launcher, /APP_VERSION = "0\.3\.2\.0"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(renderer, /VERSION = "0\.2\.2\.5"/);
+  assert.match(launcher, /RECOMMENDED_SPINE_CODEX_VERSION = "0\.3\.2"/);
+  assert.match(launcher, /VALIDATED_CODEX_COMPATIBILITY_VERSION = "0\.147\.0"/);
+  assert.match(renderer, /VERSION = "0\.3\.2\.0"/);
+  assert.equal(compatibility.spineCodexAppVersion, metadata.spineAppVersion);
+  assert.deepEqual(compatibility.local, {
+    minimumSpineCodexVersion: metadata.minimumSpineCodexVersion,
+    recommendedSpineCodexVersion: metadata.recommendedSpineCodexVersion,
+    validatedCodexCompatibilityVersion: metadata.validatedCodexCompatibilityVersion,
+  });
+  assert.equal(
+    compatibility.remote.minimumSpineCodexVersion,
+    metadata.minimumSpineCodexVersion,
+  );
+  assert.deepEqual(
+    compatibility.codexDesktop.validatedVersions,
+    metadata.validatedDesktopVersions,
+  );
+  assert.deepEqual(compatibility.notValidated[0], {
+    component: "OpenAI Codex",
+    version: "0.149.1",
+    reason: "not a SpineCodex compatibility baseline",
+  });
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
+  assert.equal(
+    metadata.scripts["build:macos"],
+    "node scripts/build-renderer.mjs --check && node scripts/build-macos-release.mjs --all",
+  );
   assert.match(builder, /NODE_VERSION = "v22\.23\.2"/);
   assert.match(builder, /metadata\.spineAppVersion/);
   assert.match(builder, /valueAfter\("--version"\)/);
   assert.match(builder, /nodejs\.org\/dist/);
   assert.match(builder, /\/usr\/bin\/qlmanage/);
+  assert.match(builder, /"compatibility\.json"/);
+  assert.match(builder, /lib", "spine-codex-compatibility\.mjs/);
+  assert.match(builder, /lib", "desktop-bundle-contract\.mjs/);
+  assert.match(builder, /await rm\(extracted, \{ recursive: true, force: true \}\)/);
+  assert.match(builder, /await rm\(nodeArchive, \{ force: true \}\)/);
+  assert.match(builder, /await rm\(app, \{ recursive: true, force: true \}\)/);
   assert.doesNotMatch(builder, /@spinejit|GhabiX|SpineCodex\/releases|npm pack/);
   assert.deepEqual(metadata.dependencies, undefined);
   assert.deepEqual(metadata.optionalDependencies, undefined);
 });
 
 test("Windows portable build contains native launchers but no upstream binary", () => {
-  assert.equal(metadata.scripts["build:windows"], "node scripts/build-windows-release.mjs --arch x64");
+  assert.equal(
+    metadata.scripts["build:windows"],
+    "node scripts/build-renderer.mjs --check && node scripts/build-windows-release.mjs --arch x64",
+  );
   assert.match(windowsBuilder, /NODE_VERSION = "v22\.23\.2"/);
   assert.match(windowsBuilder, /metadata\.spineAppVersion/);
   assert.match(
     windowsBuilder,
-    /MIN_SPINE_CODEX_VERSION = metadata\.spineCodexVersion/,
+    /MIN_SPINE_CODEX_VERSION = metadata\.minimumSpineCodexVersion/,
   );
   assert.match(
     windowsBuilder,
@@ -87,6 +130,9 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(windowsBuilder, /lib", "main-inspector\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-output-filter\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-protocol-adapter\.mjs/);
+  assert.match(windowsBuilder, /lib", "spine-codex-compatibility\.mjs/);
+  assert.match(windowsBuilder, /lib", "desktop-bundle-contract\.mjs/);
+  assert.match(windowsBuilder, /"compatibility\.json"/);
   assert.match(builder, /lib", "app-server-protocol-adapter\.mjs/);
   assert.match(appServerProtocolAdapter, /APP_INSTALLED_METHOD = "app\/installed"/);
   assert.match(appServerProtocolAdapter, /APP_READ_METHOD = "app\/read"/);

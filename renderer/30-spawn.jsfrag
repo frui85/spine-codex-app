@@ -1,0 +1,253 @@
+  function normalizeSpawnStatus(status) {
+    const key = String(status || "").replace(/[^a-z]/gi, "").toLowerCase();
+    if (["pending", "pendinginit", "preinit", "waiting", "starting"].includes(key)) {
+      return "pendingInit";
+    }
+    if (["running", "working", "active"].includes(key)) return "running";
+    if (["completed", "complete", "done"].includes(key)) return "completed";
+    if (["shutdown", "closed"].includes(key)) return "shutdown";
+    if (["interrupted", "aborted", "cancelled", "canceled"].includes(key)) {
+      return "interrupted";
+    }
+    if (["errored", "error", "failed"].includes(key)) return "errored";
+    if (["notfound", "missing"].includes(key)) return "notFound";
+    return "pendingInit";
+  }
+
+  function spawnPhase(status) {
+    switch (normalizeSpawnStatus(status)) {
+      case "running":
+        return "working";
+      case "completed":
+      case "interrupted":
+      case "shutdown":
+        return "done";
+      case "errored":
+      case "notFound":
+        return "failed";
+      default:
+        return "waiting";
+    }
+  }
+
+  function spawnStatusRank(status) {
+    const phase = spawnPhase(status);
+    if (phase === "done" || phase === "failed") return 2;
+    return phase === "working" ? 1 : 0;
+  }
+
+  function mergeSpawnTask(task, previous, now = Date.now()) {
+    const incomingStatus = normalizeSpawnStatus(task?.status);
+    const previousStatus = previous ? normalizeSpawnStatus(previous.status) : null;
+    const status =
+      previousStatus && (
+        spawnStatusRank(previousStatus) === 2 ||
+        spawnStatusRank(incomingStatus) < spawnStatusRank(previousStatus)
+      )
+        ? previousStatus
+        : incomingStatus;
+    const phase = spawnPhase(status);
+    const observedAtMs = normalizeTimestamp(previous?.observedAtMs) ?? now;
+    const startedAtMs =
+      normalizeTimestamp(previous?.startedAtMs) ??
+      (phase === "working" ? now : null);
+    const completedAtMs =
+      normalizeTimestamp(previous?.completedAtMs) ??
+      (phase === "done" || phase === "failed" ? now : null);
+    return {
+      ...task,
+      status,
+      observedAtMs,
+      startedAtMs,
+      completedAtMs,
+    };
+  }
+
+  function friendlySpawnName(summary) {
+    const compact = String(summary || "").replace(/\s+/g, " ").trim();
+    if (!compact) return "";
+    return compact.length <= 72 ? compact : `${compact.slice(0, 71).trimEnd()}…`;
+  }
+
+  function setSpawnThreadName(hostId, task) {
+    const threadId = normalizeThreadId(task?.threadId);
+    const name = friendlySpawnName(task?.summary);
+    if (!threadId || !name) {
+      return Promise.reject(new Error("Spawn thread name metadata is incomplete"));
+    }
+    const targetHostId = typeof hostId === "string" && hostId
+      ? hostId
+      : activeThreadHostId() ?? "local";
+    return sendAppServerRequest(targetHostId, "thread/name/set", {
+      threadId,
+      name,
+    });
+  }
+
+  function nameSpawnThread(hostId, task) {
+    const threadId = normalizeThreadId(task?.threadId);
+    if (!threadId || !friendlySpawnName(task?.summary)) return false;
+    const targetHostId = typeof hostId === "string" && hostId
+      ? hostId
+      : activeThreadHostId() ?? "local";
+    const key = `${targetHostId}:${threadId}`;
+    if (
+      state.namedSpawnThreads.has(key) ||
+      state.namingSpawnThreads.has(key)
+    ) {
+      return false;
+    }
+    state.namingSpawnThreads.add(key);
+    void setSpawnThreadName(targetHostId, task)
+      .then(() => {
+        state.namingSpawnThreads.delete(key);
+        state.namedSpawnThreads.add(key);
+      })
+      .catch(() => {
+        state.namingSpawnThreads.delete(key);
+      });
+    return true;
+  }
+
+  function rememberSpawnIntent(intent, hostId = null) {
+    const threadId = normalizeThreadId(intent?.threadId);
+    const callId = typeof intent?.callId === "string" ? intent.callId.trim() : "";
+    if (!threadId || !callId || !Array.isArray(intent?.tasks)) return false;
+    let threadIntents = state.spawnIntents.get(threadId);
+    if (!threadIntents) {
+      threadIntents = new Map();
+      state.spawnIntents.set(threadId, threadIntents);
+    }
+    const previous = threadIntents.get(callId);
+    const previousTasks = new Map(
+      (previous?.tasks ?? []).map((task) => [Number(task.ordinal), task]),
+    );
+    const tasks = intent.tasks
+      .slice(0, MAX_SPAWN_INTENT_TASKS)
+      .map((task, ordinal) => {
+        const normalizedOrdinal = Number.isInteger(Number(task?.ordinal))
+          ? Number(task.ordinal)
+          : ordinal;
+        const prior = previousTasks.get(normalizedOrdinal);
+        return normalizeSpawnTarget({
+          ...prior,
+          ...task,
+          callId,
+          ordinal: normalizedOrdinal,
+          summary: task?.summary || prior?.summary,
+          threadId: task?.threadId || prior?.threadId,
+          agentPath: task?.agentPath || prior?.agentPath,
+          observedAtMs: task?.observedAtMs || prior?.observedAtMs,
+          startedAtMs: task?.startedAtMs || prior?.startedAtMs,
+          completedAtMs: task?.completedAtMs || prior?.completedAtMs,
+        });
+      })
+      .filter(Boolean);
+    if (!tasks.length) return false;
+    const normalized = normalizeSpawnIntent({
+      ...previous,
+      ...intent,
+      threadId,
+      callId,
+      hostId: hostId || intent.hostId || previous?.hostId,
+      tasks,
+    });
+    if (!normalized) return false;
+    const unchanged = previous && JSON.stringify({
+      ...previous,
+      cachedAt: 0,
+    }) === JSON.stringify({
+      ...normalized,
+      cachedAt: 0,
+    });
+    if (!unchanged) {
+      threadIntents.delete(callId);
+      threadIntents.set(callId, normalized);
+      state.spawnIntents.delete(threadId);
+      state.spawnIntents.set(threadId, threadIntents);
+      while (threadIntents.size > MAX_SPAWN_INTENTS_PER_THREAD) {
+        threadIntents.delete(threadIntents.keys().next().value);
+      }
+      while (state.spawnIntents.size > MAX_SPAWN_INTENT_THREADS) {
+        state.spawnIntents.delete(state.spawnIntents.keys().next().value);
+      }
+      // Deliberately synchronous: an interrupted parent turn must not lose the
+      // call identity and task summaries before live Spawn progress arrives.
+      writeSpawnIntentCache();
+    }
+    const targetHostId = normalized.hostId || hostId;
+    for (const task of normalized.tasks) nameSpawnThread(targetHostId, task);
+    if (threadId === state.activeThreadId) scheduleNativeSubagentLabelSync(4);
+    return !unchanged;
+  }
+
+  function rememberSpawnCallNotification(params, hostId = null) {
+    const item = params?.item;
+    if (!item || !["function_call", "custom_tool_call"].includes(item.type)) {
+      return false;
+    }
+    if (item.namespace !== "spine" || item.name !== "spawn") return false;
+    const callId = typeof item.call_id === "string"
+      ? item.call_id
+      : typeof item.callId === "string"
+        ? item.callId
+        : "";
+    let args = item.arguments ?? item.input;
+    if (typeof args === "string") {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        return false;
+      }
+    }
+    if (!callId || !Array.isArray(args?.tasks)) return false;
+    return rememberSpawnIntent({
+      threadId: params.threadId,
+      turnId: params.turnId,
+      callId,
+      hostId,
+      tasks: args.tasks.map((task, ordinal) => ({
+        ordinal,
+        summary: task?.summary,
+      })),
+    }, hostId);
+  }
+
+  function rememberSpawn(progress, hostId = null) {
+    if (
+      !progress ||
+      typeof progress.threadId !== "string" ||
+      typeof progress.callId !== "string" ||
+      !Array.isArray(progress.tasks)
+    ) {
+      return false;
+    }
+    const threadId = normalizeThreadId(progress.threadId);
+    if (!threadId) return false;
+    let threadSpawns = state.spawns.get(threadId);
+    if (!threadSpawns) {
+      threadSpawns = new Map();
+      state.spawns.set(threadId, threadSpawns);
+    }
+    const previous = threadSpawns.get(progress.callId);
+    const previousTasks = new Map(
+      (previous?.tasks ?? []).map((task) => [Number(task.ordinal), task]),
+    );
+    const now = Date.now();
+    const normalized = {
+      ...progress,
+      tasks: progress.tasks.map((task) =>
+        mergeSpawnTask(task, previousTasks.get(Number(task.ordinal)), now)),
+    };
+    threadSpawns.set(progress.callId, normalized);
+    rememberSpawnIntent({
+      threadId,
+      turnId: progress.turnId,
+      callId: progress.callId,
+      hostId,
+      tasks: normalized.tasks,
+    }, hostId);
+    for (const task of normalized.tasks) nameSpawnThread(hostId, task);
+    if (threadId === state.activeThreadId) scheduleNativeSubagentLabelSync(4);
+    return true;
+  }

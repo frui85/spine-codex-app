@@ -1,0 +1,844 @@
+  function workspaceSidebarToggle() {
+    return [...document.querySelectorAll("button")]
+      .filter((button) => {
+        const rect = button.getBoundingClientRect();
+        return (
+          /^(?:true|false)$/.test(button.getAttribute("aria-pressed") ?? "") &&
+          Boolean(button.querySelector("svg")) &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.top >= 0 &&
+          rect.top < 64 &&
+          rect.left > innerWidth * 0.5
+        );
+      })
+      .sort((left, right) =>
+        right.getBoundingClientRect().left - left.getBoundingClientRect().left)[0] ?? null;
+  }
+
+  function workspacePaneCandidate() {
+    return [...document.querySelectorAll('[data-app-shell-tabs="true"]')]
+      .filter((pane) =>
+        pane.querySelector('[data-app-shell-tab-strip-controller="right"]'))
+      .filter((pane) => {
+        const rect = pane.getBoundingClientRect();
+        return rect.width >= 240 && rect.height >= 240;
+      })
+      .sort((left, right) =>
+        right.getBoundingClientRect().right -
+        left.getBoundingClientRect().right)[0] ?? null;
+  }
+
+  function workspacePaneLayout(pane) {
+    if (!pane?.isConnected) return null;
+    const rect = pane.getBoundingClientRect();
+    const shell = pane.closest('[data-app-shell-focus-area="right-panel"]');
+    const shellRect = shell?.getBoundingClientRect();
+    const shellStyle = shell ? getComputedStyle(shell) : null;
+    const opacity = Number(shellStyle?.opacity ?? 1);
+    const viewportWidth = document.documentElement.clientWidth || innerWidth;
+    const viewportHeight = document.documentElement.clientHeight || innerHeight;
+    const shellWideEnough =
+      !shellRect || shellRect.width >= Math.min(240, rect.width * 0.75);
+    const insideViewport =
+      rect.left >= -1 &&
+      rect.right <= viewportWidth + 1 &&
+      rect.top >= -1 &&
+      rect.bottom <= viewportHeight + 1;
+    const ready =
+      rect.width >= 240 &&
+      rect.height >= 240 &&
+      shellWideEnough &&
+      insideViewport &&
+      opacity >= 0.95 &&
+      shellStyle?.visibility !== "hidden";
+    const collapsed =
+      !shell ||
+      shellRect.width <= 4 ||
+      opacity <= 0.05 ||
+      rect.left >= viewportWidth - 2;
+    return { pane, shell, rect, shellRect, opacity, ready, collapsed };
+  }
+
+  function workspacePane() {
+    const candidate = workspacePaneCandidate();
+    return workspacePaneLayout(candidate)?.ready ? candidate : null;
+  }
+
+  function resetWorkspacePaneReadiness() {
+    state.detailPaneCandidate = null;
+    state.detailPaneStableFrames = 0;
+    state.detailPaneCollapsedFrames = 0;
+    state.detailPaneLastMeasure = null;
+  }
+
+  function restoreWorkspaceDetailUi() {
+    const ui = state.detailUi;
+    if (!ui) return;
+    ui.tabObserver?.disconnect();
+    ui.tabStrip.removeEventListener("click", ui.onTabStripClick, true);
+    if (ui.pane.isConnected) {
+      ui.pane.removeAttribute("data-spine-detail-active");
+    }
+    if (ui.tabList.isConnected && ui.tabTrack.isConnected) {
+      const nativeCount = [...ui.tabList.children].filter((element) =>
+        element !== ui.tabHost &&
+        element.matches?.('[data-app-shell-tab-controller="right"]')).length;
+      ui.tabTrack.style.width =
+        nativeCount === ui.originalNativeTabCount
+          ? ui.originalTabTrackWidth
+          : workspaceTabListWidth(ui.tabStrip, nativeCount);
+    }
+    ui.tabHost.remove();
+    ui.host.remove();
+    ui.nativeTabStyle.remove();
+    state.detailUi = null;
+  }
+
+  function workspaceTabListWidth(tabStrip, count) {
+    if (count <= 0) return "clamp(0px, 100% + 0px, 0px)";
+    const reserved = Math.max(
+      0,
+      Math.round(parseFloat(getComputedStyle(tabStrip).scrollPaddingInlineEnd) || 0),
+    );
+    return `clamp(${90 * count}px, 100% - ${reserved}px, ${160 * count}px)`;
+  }
+
+  function syncWorkspaceTabList(ui) {
+    if (
+      !ui?.tabList.isConnected ||
+      !ui?.tabTrack.isConnected ||
+      state.detailUi !== ui
+    ) return;
+    if (ui.tabHost.parentElement !== ui.tabList) ui.tabList.append(ui.tabHost);
+    const nativeCount = [...ui.tabList.children].filter((element) =>
+      element !== ui.tabHost &&
+      element.matches?.('[data-app-shell-tab-controller="right"]')).length;
+    const width = workspaceTabListWidth(ui.tabStrip, nativeCount + 1);
+    if (ui.tabTrack.style.width !== width) ui.tabTrack.style.width = width;
+  }
+
+  function workspaceTabListParts(tabStrip) {
+    if (!tabStrip) return null;
+    const tabList =
+      tabStrip.querySelector(':scope > [role="tablist"]') ??
+      tabStrip.querySelector('[role="tablist"]');
+    if (!tabList) return null;
+    let tabTrack = tabList;
+    while (tabTrack.parentElement && tabTrack.parentElement !== tabStrip) {
+      tabTrack = tabTrack.parentElement;
+    }
+    if (tabTrack.parentElement !== tabStrip) tabTrack = tabList;
+    return { tabList, tabTrack };
+  }
+
+  function setWorkspaceDetailActive(active) {
+    state.detailTabActive = Boolean(active);
+    const ui = state.detailUi;
+    if (!ui) return;
+    ui.active = state.detailTabActive;
+    ui.host.style.display = ui.active ? "block" : "none";
+    ui.tabHost.dataset.active = String(ui.active);
+    ui.tabRoot.querySelector(".label")
+      ?.setAttribute("aria-selected", String(ui.active));
+    ui.pane.toggleAttribute("data-spine-detail-active", ui.active);
+  }
+
+  function createWorkspaceDetailUi(pane) {
+    restoreWorkspaceDetailUi();
+    const tabStrip = pane.querySelector(
+      '[data-app-shell-tab-strip-controller="right"]',
+    );
+    const tabParts = workspaceTabListParts(tabStrip);
+    const tabList = tabParts?.tabList;
+    const tabTrack = tabParts?.tabTrack;
+    const header = tabStrip?.parentElement;
+    if (!tabStrip || !tabList || !tabTrack || !header) return null;
+
+    const tabHost = document.createElement("div");
+    tabHost.id = "spine-codex-workspace-tab";
+    tabHost.dataset.appShellTabController = "right";
+    tabHost.dataset.tabId = "spine-codex:detail";
+    tabHost.style.cssText =
+      "position:relative;display:flex;flex:1 1 0;min-width:90px;max-width:160px;height:28px;flex-shrink:0;align-items:center;overflow:hidden;padding-inline-end:4px;contain:content;pointer-events:auto;-webkit-app-region:no-drag;";
+    const tabRoot = tabHost.attachShadow({ mode: "open" });
+    tabRoot.innerHTML = `
+      <style>
+        :host { color: var(--color-token-text-primary, currentColor); font-family: inherit; }
+        * { box-sizing: border-box; }
+        button { font: inherit; }
+        .bar { display: flex; width: 100%; height: 100%; min-width: 0; align-items: center; }
+        .tab { position: relative; display: flex; width: 100%; height: 28px;
+          min-width: 0; align-items: center; overflow: hidden; border-radius: 8px;
+          padding: 4px 4px 4px 8px; background: transparent;
+          transition: background-color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1));
+          -webkit-app-region: no-drag; }
+        :host([data-active="true"]) .tab { background: color-mix(in srgb,
+          var(--color-token-foreground, currentColor) 5%,
+          var(--color-token-main-surface-primary, transparent)); }
+        .label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 8px;
+          border: 0; background: transparent; padding: 0; color: inherit; cursor: default;
+          font-size: 14px; line-height: 20px; text-align: left;
+          transition: scale var(--transition-duration-basic, .15s)
+            var(--ease-out, cubic-bezier(0, 0, .2, 1)); }
+        .label:active { scale: .98; }
+        .icon { width: 16px; height: 16px; flex: 0 0 auto; }
+        .icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+          stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+        .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .close { display: grid; width: 20px; height: 20px; flex: 0 0 auto; place-items: center;
+          border: 0; border-radius: 6px; padding: 0; background: transparent;
+          color: var(--color-token-text-tertiary, currentColor); cursor: pointer;
+          pointer-events: auto; -webkit-app-region: no-drag;
+          transition: background-color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            scale var(--transition-duration-basic, .15s)
+            var(--ease-out, cubic-bezier(0, 0, .2, 1)); }
+        .close:active { scale: .98; }
+        .close:hover { background: var(--color-token-list-hover-background,
+          color-mix(in srgb, currentColor 7%, transparent));
+          color: var(--color-token-text-primary, currentColor); }
+        .close:focus-visible { outline: 2px solid var(--color-token-focus-border, currentColor);
+          outline-offset: -1px; }
+        .close svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
+          stroke-width: 1.5; stroke-linecap: round; }
+        @media (prefers-reduced-motion: reduce) {
+          .tab, .label, .close { transition: none; }
+          .label:active, .close:active { scale: 1; }
+        }
+      </style>
+      <div class="bar">
+        <div class="tab">
+          <button class="label" type="button" role="tab" aria-selected="true">
+            <span class="icon" aria-hidden="true">
+              <svg viewBox="0 0 20 20">${SPINE_LOGO_MARKUP}</svg>
+            </span>
+            <span class="title"></span>
+          </button>
+          <button class="close" type="button">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 6 8 8m0-8-8 8"/></svg>
+          </button>
+        </div>
+      </div>`;
+
+    const host = document.createElement("div");
+    host.id = "spine-codex-workspace-detail";
+    const headerHeight = Math.max(1, Math.round(header.getBoundingClientRect().height));
+    host.style.cssText =
+      `position:absolute;inset:${headerHeight}px 0 0;z-index:20;display:block;min-width:0;background:var(--color-token-main-surface-primary);`;
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `
+      <style>
+        :host { display: block; height: 100%; min-width: 0;
+          color: var(--color-token-text-primary, currentColor); font-family: inherit; }
+        * { box-sizing: border-box; }
+        button { font: inherit; }
+        .shell { display: flex; height: 100%; min-height: 0; flex-direction: column;
+          background: var(--color-token-main-surface-primary, transparent); }
+        .body { min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto;
+          padding: 6px 16px 22px; scrollbar-width: thin; }
+        .status-line { display: flex; align-items: center; gap: 8px; padding: 11px 0 12px;
+          color: var(--color-token-text-secondary, currentColor); font-size: 13px; line-height: 18px; }
+        .status-line svg { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: currentColor;
+          stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; }
+        .status-line.done { color: var(--color-icon-success, #00a240); }
+        .status-line.error { color: var(--color-icon-error, #e02e2a); }
+        .status-line.warning { color: var(--color-icon-warning, #e25507); }
+        .status-meta { margin-left: auto; color: var(--color-token-text-tertiary, currentColor);
+          font-size: 12px; }
+        .detail-section { padding: 13px 0; border-top: .5px solid
+          var(--color-token-border-default, color-mix(in srgb, currentColor 12%, transparent)); }
+        .detail-label { margin-bottom: 6px; color: var(--color-token-text-tertiary, currentColor);
+          font-size: 12px; line-height: 16px; font-weight: 500; }
+        .detail-text { color: var(--color-token-text-secondary, currentColor);
+          font-size: 13px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .detail-section.compact { display: grid; grid-template-columns: auto minmax(0,1fr);
+          gap: 10px; align-items: baseline; }
+        .detail-section.compact .detail-label { margin: 0; white-space: nowrap; }
+        .detail-section.memory .detail-text { max-height: min(420px, 48vh); overflow: auto;
+          scrollbar-width: thin; }
+        .detail-note { margin-top: 7px; color: var(--color-token-text-tertiary, currentColor);
+          font-size: 11.5px; line-height: 16px; }
+        .detail-note.standalone { padding: 13px 0; margin: 0; border-top: .5px solid
+          var(--color-token-border-default, color-mix(in srgb, currentColor 12%, transparent)); }
+        .detail-actions { display: flex; flex-direction: column; margin: 3px -7px 0; padding-top: 6px;
+          border-top: .5px solid var(--color-token-border-default,
+          color-mix(in srgb, currentColor 12%, transparent)); }
+        .detail-action { display: flex; min-height: 34px; align-items: center; gap: 9px; padding: 6px 8px;
+          border: 0; border-radius: 7px; background: transparent;
+          color: var(--color-token-text-secondary, currentColor); font-size: 13px;
+          line-height: 18px; text-align: left; cursor: pointer; transform-origin: center;
+          transition: background-color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            scale var(--transition-duration-basic, .15s)
+            var(--ease-out, cubic-bezier(0, 0, .2, 1)); }
+        .detail-action:active:not(:disabled) { scale: .98; }
+        .detail-action:hover { background: var(--color-token-list-hover-background,
+          color-mix(in srgb, currentColor 6%, transparent));
+          color: var(--color-token-text-primary, currentColor); }
+        .detail-action:disabled { cursor: default; opacity: .55; }
+        .detail-action:disabled:hover { background: transparent;
+          color: var(--color-token-text-secondary, currentColor); }
+        .detail-action:focus-visible { outline: 2px solid
+          var(--color-token-focus-border, currentColor); outline-offset: -1px; }
+        .detail-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+          stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+        @media (prefers-reduced-motion: reduce) {
+          * { scroll-behavior: auto !important; }
+          .detail-action { transition: none; }
+          .detail-action:active:not(:disabled) { scale: 1; }
+        }
+      </style>
+      <div class="shell"><div class="body"></div></div>`;
+    const closeButton = tabRoot.querySelector(".close");
+    closeButton.setAttribute("aria-label", t("detail.close"));
+    for (const type of ["pointerdown", "mousedown"]) {
+      closeButton.addEventListener(type, (event) => event.stopPropagation(), true);
+    }
+    closeButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeWorkspaceDetail(true, true);
+    }, true);
+    tabRoot.querySelector(".label").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setWorkspaceDetailActive(true);
+      if (!host.isConnected) scheduleWorkspaceDetailMount(24);
+    });
+    root.addEventListener("click", onWorkspaceDetailClick);
+    const nativeTabStyle = document.createElement("style");
+    nativeTabStyle.id = "spine-codex-native-tab-style";
+    nativeTabStyle.textContent = `
+      [data-spine-detail-active="true"]
+      [data-app-shell-tab-controller="right"]:not(#spine-codex-workspace-tab)
+      > [data-tab-id]:has(> button[role="tab"][aria-selected="true"])
+      > div:first-child { background: transparent !important; }
+    `;
+    pane.append(nativeTabStyle);
+    tabList.append(tabHost);
+    pane.append(host);
+    const originalNativeTabCount = [...tabList.children].filter((element) =>
+      element !== tabHost &&
+      element.matches?.('[data-app-shell-tab-controller="right"]')).length;
+    state.detailUi = {
+      pane,
+      tabStrip,
+      tabList,
+      tabTrack,
+      originalTabTrackWidth: tabTrack.style.width,
+      originalNativeTabCount,
+      tabHost,
+      tabRoot,
+      title: tabRoot.querySelector(".title"),
+      closeButton,
+      host,
+      root,
+      body: root.querySelector(".body"),
+      nativeTabStyle,
+      tabObserver: null,
+      onTabStripClick: null,
+      active: true,
+    };
+    const ui = state.detailUi;
+    ui.onTabStripClick = (event) => {
+      if (event.composedPath().includes(tabHost)) return;
+      const target = event.target?.nodeType === Node.ELEMENT_NODE
+        ? event.target
+        : event.target?.parentElement;
+      if (
+        target?.closest?.(
+          'button, [data-app-shell-tab-controller="right"]',
+        )
+      ) {
+        queueMicrotask(() => {
+          if (state.detailUi === ui) setWorkspaceDetailActive(false);
+        });
+      }
+    };
+    tabStrip.addEventListener("click", ui.onTabStripClick, true);
+    ui.tabObserver = new MutationObserver(() => {
+      queueMicrotask(() => syncWorkspaceTabList(ui));
+    });
+    if (tabTrack === tabList) {
+      ui.tabObserver.observe(tabList, {
+        childList: true,
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+    } else {
+      ui.tabObserver.observe(tabList, { childList: true });
+      ui.tabObserver.observe(tabTrack, {
+        attributes: true,
+        attributeFilter: ["style"],
+      });
+    }
+    syncWorkspaceTabList(ui);
+    setWorkspaceDetailActive(state.detailTabActive);
+    return state.detailUi;
+  }
+
+  function ensureWorkspaceDetailUi(pane) {
+    if (
+      state.detailUi?.host.isConnected &&
+      state.detailUi?.tabHost.isConnected &&
+      state.detailUi.pane === pane
+    ) {
+      return state.detailUi;
+    }
+    return createWorkspaceDetailUi(pane);
+  }
+
+  function closeWorkspaceDetail(clearSelection = true, closeOwnedPane = true) {
+    if (state.detailMountFrame) cancelAnimationFrame(state.detailMountFrame);
+    if (state.detailRefreshFrame) cancelAnimationFrame(state.detailRefreshFrame);
+    state.detailMountFrame = 0;
+    state.detailRefreshFrame = 0;
+    state.detailMountAttempts = 0;
+    state.detailMountRetries = 0;
+    state.detailRequested = false;
+    state.detailTabActive = true;
+    const paneWasReady = Boolean(workspacePane());
+    const shouldClosePane =
+      closeOwnedPane && state.detailOpenedPane && paneWasReady;
+    state.detailOpenedPane = false;
+    resetWorkspacePaneReadiness();
+    restoreWorkspaceDetailUi();
+    if (clearSelection) {
+      const threadId = normalizeThreadId(state.activeThreadId);
+      if (threadId) state.selectedRows.delete(threadId);
+    }
+    if (shouldClosePane) {
+      const toggle = workspaceSidebarToggle();
+      if (toggle) {
+        state.detailToggleInProgress = true;
+        toggle.click();
+        state.detailToggleInProgress = false;
+      }
+      scheduleMount(36);
+    }
+    if (clearSelection && state.ui?.host.isConnected && state.expanded) renderActiveNow();
+  }
+
+  function sideStatus(icon, tone, text, meta = "") {
+    const row = document.createElement("div");
+    row.className = `status-line ${tone ?? ""}`;
+    row.innerHTML = ICONS[icon] ?? ICONS.idle;
+    const label = document.createElement("span");
+    label.textContent = text;
+    row.append(label);
+    if (meta) {
+      const secondary = document.createElement("span");
+      secondary.className = "status-meta";
+      secondary.textContent = meta;
+      row.append(secondary);
+    }
+    return row;
+  }
+
+  function renderWorkspaceDetail(item, snapshot, pane) {
+    const ui = ensureWorkspaceDetailUi(pane);
+    if (!ui) return false;
+    const body = document.createDocumentFragment();
+    if (item.kind === "node") {
+      const detail = nodeDetailModel(snapshot, item.nodeId);
+      if (!detail) return false;
+      ui.title.textContent = `Spine · ${detail.nodeId}`;
+      const [icon, tone] = nodeVisual(detail, detail.active, detail.childCount > 0);
+      const childMeta = detail.childCount > 0
+        ? tp("detail.children", detail.childCount)
+        : "";
+      body.append(sideStatus(
+        icon,
+        tone,
+        nodeStatusLabel(detail),
+        [
+          contextLocationLabel(snapshot, detail),
+          childMeta,
+        ].filter(Boolean).join(" · "),
+      ));
+      if (detail.path.length > 1) {
+        body.append(createDetailSection(
+          t("detail.branchPath"),
+          detail.path.join("  ›  "),
+          "compact",
+        ));
+      }
+      if (detail.summary) body.append(createDetailSection(t("detail.task"), detail.summary));
+      if (detail.spawnLink?.agentPath) body.append(createDetailSection(
+        t("detail.agentPath"),
+        detail.spawnLink.agentPath,
+        "compact",
+      ));
+      if (detail.spawnLink?.threadId) body.append(createDetailSection(
+        t("detail.childThread"),
+        detail.spawnLink.threadId,
+        "compact",
+      ));
+      const spawnTiming = detail.spawnLink
+        ? spawnTimingDetail({
+            ...detail.spawnLink,
+            status:
+              detail.spawnOutcome === "errored"
+                ? "errored"
+                : detail.spawnOutcome === "aborted"
+                  ? "interrupted"
+                  : "completed",
+          })
+        : null;
+      if (spawnTiming) body.append(createDetailSection(
+        t("detail.runtime"),
+        spawnTiming,
+        "compact",
+      ));
+      if (detail.memorySummary) {
+        const memory = createDetailSection(
+          t("detail.memory"),
+          detail.memorySummary,
+          "memory",
+        );
+        if (detail.memorySummaryTruncated) {
+          const note = document.createElement("div");
+          note.className = "detail-note";
+          note.textContent = t("detail.memoryTruncated");
+          memory.append(note);
+        }
+        body.append(memory);
+      } else if (detail.active || detail.status === "opened") {
+        const note = document.createElement("div");
+        note.className = "detail-note standalone";
+        note.textContent = t("detail.memoryPending");
+        body.append(note);
+      }
+      const pressure = contextPressureText(detail.contextPressure);
+      if (pressure) body.append(createDetailSection(
+        t("detail.contextGrowth"), pressure, "compact"));
+      if (detail.start != null) {
+        const end = detail.end == null
+          ? (detail.active ? t("timing.now") : null)
+          : `#${detail.end}`;
+        body.append(createDetailSection(
+          t("detail.eventRange"),
+          end ? `#${detail.start} → ${end}` : `#${detail.start}`,
+          "compact",
+        ));
+      }
+      const actions = document.createElement("div");
+      actions.className = "detail-actions";
+      if (detail.spawnOutcome) {
+        actions.append(createDetailAction(
+          t("detail.openSubagent"),
+          "open-child-agent",
+          JSON.stringify({
+            ...(detail.spawnLink ?? {}),
+            summary: detail.spawnLink?.summary || detail.summary,
+            resultSummary: detail.memorySummary,
+          }),
+        ));
+      }
+      const subtreeToggleable =
+        item.childCount > 0 &&
+        item.subtreeKey &&
+        (
+          item.subtreeCollapsed ||
+          state.expandedSubtrees.has(item.subtreeKey)
+        );
+      if (subtreeToggleable) {
+        actions.append(createDetailAction(
+          state.expandedSubtrees.has(item.subtreeKey)
+            ? t("detail.hideSubtree")
+            : t("detail.showSubtree"),
+          "toggle-subtree",
+          item.subtreeKey,
+        ));
+      }
+      actions.append(createDetailAction(
+        t("detail.copyNodeId"), "copy-node-id", detail.nodeId));
+      if (detail.spawnLink?.threadId) actions.append(createDetailAction(
+        t("detail.copyChildThreadId"),
+        "copy-value",
+        detail.spawnLink.threadId,
+      ));
+      if (detail.memorySummary) actions.append(createDetailAction(
+        t("detail.copyMemory"), "copy-memory", detail.nodeId));
+      body.append(actions);
+    } else if (item.kind === "spawn") {
+      const task = item.spawnTask;
+      if (!task) return false;
+      ui.title.textContent = t("spawn.title", {
+        count: formatInteger(Number(task.ordinal) + 1),
+      });
+      const visual = spawnVisual(task.status);
+      body.append(sideStatus(
+        visual.icon,
+        visual.tone,
+        spawnStatusLabel(task.status),
+      ));
+      if (task.summary) body.append(createDetailSection(t("detail.task"), task.summary));
+      if (task.agentPath) body.append(createDetailSection(
+        t("detail.agentPath"), task.agentPath, "compact"));
+      if (task.threadId) body.append(createDetailSection(
+        t("detail.childThread"), task.threadId, "compact"));
+      const timing = spawnTimingDetail(task);
+      if (timing) body.append(createDetailSection(
+        t("detail.runtime"),
+        timing,
+        "compact",
+      ));
+      if (task.threadId) {
+        const actions = document.createElement("div");
+        actions.className = "detail-actions";
+        actions.append(createDetailAction(
+          t("detail.openSubagent"),
+          "open-child-agent",
+          JSON.stringify({
+            callId: task.callId,
+            ordinal: task.ordinal,
+            threadId: task.threadId,
+            agentPath: task.agentPath,
+            summary: task.summary,
+            observedAtMs: task.observedAtMs,
+            startedAtMs: task.startedAtMs,
+            completedAtMs: task.completedAtMs,
+          }),
+        ));
+        actions.append(createDetailAction(
+          t("detail.copyChildThreadId"), "copy-value", task.threadId));
+        body.append(actions);
+      }
+    } else {
+      return false;
+    }
+    ui.body.replaceChildren(body);
+    ui.body.scrollTop = 0;
+    return true;
+  }
+
+  function selectedWorkspaceDetail() {
+    const threadId = normalizeThreadId(state.activeThreadId);
+    const snapshot = currentSnapshot();
+    const rowKey = threadId ? state.selectedRows.get(threadId) : null;
+    if (!snapshot || !rowKey) return null;
+    const item = resolveWorkspaceDetailItem(snapshot, rowKey);
+    return item ? { item, snapshot } : null;
+  }
+
+  function mountWorkspaceDetail() {
+    if (!state.detailRequested || state.destroyed) return true;
+    const selected = selectedWorkspaceDetail();
+    if (!selected) {
+      closeWorkspaceDetail(true, true);
+      return true;
+    }
+    const candidate = workspacePaneCandidate();
+    const layout = workspacePaneLayout(candidate);
+    let pane = layout?.ready ? candidate : null;
+    if (!pane) {
+      state.detailPaneStableFrames = 0;
+      if (candidate !== state.detailPaneCandidate) {
+        state.detailPaneCandidate = candidate;
+        state.detailPaneCollapsedFrames = 0;
+        state.detailPaneLastMeasure = null;
+      }
+      const viewportWidth = document.documentElement.clientWidth || innerWidth;
+      const collapsedPreview = Boolean(
+        layout?.shellRect &&
+        layout.shellRect.width < Math.min(240, layout.rect.width * 0.75) &&
+        layout.rect.right > viewportWidth + 1 &&
+        layout.opacity < 0.95
+      );
+      const measure = layout
+        ? {
+            pane: candidate,
+            shellWidth: layout.shellRect?.width ?? 0,
+            left: layout.rect.left,
+            opacity: layout.opacity,
+          }
+        : null;
+      const previous = state.detailPaneLastMeasure;
+      const stableInvalid =
+        !candidate ||
+        Boolean(
+          previous &&
+          previous.pane === candidate &&
+          Math.abs(previous.shellWidth - measure.shellWidth) < 0.75 &&
+          Math.abs(previous.left - measure.left) < 0.75 &&
+          Math.abs(previous.opacity - measure.opacity) < 0.01
+        );
+      state.detailPaneLastMeasure = measure;
+      state.detailPaneCollapsedFrames =
+        (!candidate || layout?.collapsed || collapsedPreview) && stableInvalid
+          ? state.detailPaneCollapsedFrames + 1
+          : 0;
+      const toggle = workspaceSidebarToggle();
+      if (
+        !state.detailOpenedPane &&
+        toggle &&
+        state.detailPaneCollapsedFrames >= 4
+      ) {
+        state.detailOpenedPane = true;
+        state.detailPaneCollapsedFrames = 0;
+        state.detailPaneLastMeasure = null;
+        state.detailToggleInProgress = true;
+        toggle.click();
+        state.detailToggleInProgress = false;
+      }
+      return false;
+    }
+    if (pane !== state.detailPaneCandidate) {
+      state.detailPaneCandidate = pane;
+      state.detailPaneStableFrames = 1;
+      state.detailPaneCollapsedFrames = 0;
+      return false;
+    }
+    state.detailPaneStableFrames += 1;
+    state.detailPaneCollapsedFrames = 0;
+    state.detailPaneLastMeasure = null;
+    if (state.detailPaneStableFrames < 2) return false;
+    state.detailMountRetries = 0;
+    return renderWorkspaceDetail(selected.item, selected.snapshot, pane);
+  }
+
+  function scheduleWorkspaceDetailMount(attempts = 180) {
+    if (!state.detailRequested || state.destroyed) return;
+    state.detailMountAttempts = Math.max(state.detailMountAttempts, attempts);
+    if (state.detailMountFrame) return;
+    const attempt = () => {
+      state.detailMountFrame = 0;
+      if (mountWorkspaceDetail()) {
+        state.detailMountAttempts = 0;
+        return;
+      }
+      state.detailMountAttempts -= 1;
+      if (state.detailMountAttempts > 0) {
+        state.detailMountFrame = requestAnimationFrame(attempt);
+      } else if (state.detailRequested && state.detailMountRetries < 2) {
+        state.detailMountRetries += 1;
+        state.detailOpenedPane = false;
+        resetWorkspacePaneReadiness();
+        state.detailMountAttempts = 120;
+        state.detailMountFrame = requestAnimationFrame(attempt);
+      }
+    };
+    state.detailMountFrame = requestAnimationFrame(attempt);
+  }
+
+  function scheduleWorkspaceDetailRefresh() {
+    if (!state.detailRequested || state.detailRefreshFrame || state.destroyed) return;
+    state.detailRefreshFrame = requestAnimationFrame(() => {
+      state.detailRefreshFrame = 0;
+      if (!mountWorkspaceDetail()) scheduleWorkspaceDetailMount(24);
+    });
+  }
+
+  function onWorkspaceDetailClick(event) {
+    const control = event.target?.closest?.("[data-spine-action]");
+    if (!control) return;
+    const action = control.dataset.spineAction;
+    if (action === "toggle-subtree") {
+      const key = control.dataset.value;
+      if (!key) return;
+      if (state.expandedSubtrees.has(key)) state.expandedSubtrees.delete(key);
+      else state.expandedSubtrees.add(key);
+      renderActiveNow(true);
+      scheduleWorkspaceDetailRefresh();
+      return;
+    }
+    if (action === "copy-node-id" || action === "copy-value") {
+      void copyText(control.dataset.value ?? "", control);
+    } else if (action === "open-child-agent") {
+      let target = null;
+      try {
+        target = JSON.parse(control.dataset.value || "null");
+      } catch {}
+      if (target) void openNativeSubagent(target, control);
+    } else if (action === "copy-memory") {
+      const detail = nodeDetailModel(currentSnapshot(), control.dataset.value);
+      void copyText(detail?.memorySummary ?? "", control);
+    }
+  }
+
+  async function copyText(text, button) {
+    if (!text) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const area = document.createElement("textarea");
+        area.value = text;
+        area.style.position = "fixed";
+        area.style.opacity = "0";
+        document.body.append(area);
+        area.select();
+        if (!document.execCommand?.("copy")) throw new Error("copy unavailable");
+        area.remove();
+      }
+      const label = button?.querySelector?.("span");
+      if (!label) return;
+      const previous = label.textContent;
+      label.textContent = t("feedback.copied");
+      setTimeout(() => {
+        if (label.isConnected) label.textContent = previous;
+      }, 1_200);
+    } catch {}
+  }
+
+  function onTreeClick(event) {
+    const control = event.target?.closest?.("[data-spine-action]");
+    if (!control) return;
+    const action = control.dataset.spineAction;
+    const threadId = normalizeThreadId(state.activeThreadId);
+    if (action === "toggle-bucket") {
+      const bucketKey = control.dataset.bucketKey;
+      if (!bucketKey) return;
+      if (state.expandedBuckets.has(bucketKey)) state.expandedBuckets.delete(bucketKey);
+      else state.expandedBuckets.add(bucketKey);
+      renderActiveNow(true);
+      return;
+    }
+    if (
+      action === "toggle-context-history" ||
+      action === "toggle-context-epoch"
+    ) {
+      const epochKey = control.dataset.epochKey;
+      if (!epochKey) return;
+      if (state.expandedEpochs.has(epochKey)) state.expandedEpochs.delete(epochKey);
+      else state.expandedEpochs.add(epochKey);
+      renderActiveNow(true);
+      return;
+    }
+    if (action === "toggle-detail") {
+      const rowKey = control.dataset.rowKey;
+      if (!threadId || !rowKey) return;
+      state.selectedRows.set(threadId, rowKey);
+      state.detailRequested = true;
+      state.detailTabActive = true;
+      setWorkspaceDetailActive(true);
+      state.detailMountRetries = 0;
+      if (!state.detailUi) state.detailOpenedPane = false;
+      renderActiveNow();
+      scheduleWorkspaceDetailMount(60);
+      return;
+    }
+    if (action === "toggle-subtree") {
+      const subtreeKey = control.dataset.value;
+      if (!subtreeKey) return;
+      if (state.expandedSubtrees.has(subtreeKey)) state.expandedSubtrees.delete(subtreeKey);
+      else state.expandedSubtrees.add(subtreeKey);
+      renderActiveNow(true);
+      return;
+    }
+    if (action === "copy-node-id" || action === "copy-value") {
+      void copyText(control.dataset.value ?? "", control);
+      return;
+    }
+    if (action === "copy-memory") {
+      const detail = nodeDetailModel(currentSnapshot(), control.dataset.value);
+      void copyText(detail?.memorySummary ?? "", control);
+    }
+  }

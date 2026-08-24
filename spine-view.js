@@ -9,8 +9,10 @@
   const SPINE_STABLE_SETTINGS_FEATURES = new Set([
     "spine_jit",
     "spine_trim",
+    "spine_spawn",
   ]);
   const SETTINGS_SECTION_ID = "spine-codex-settings";
+  const LOCAL_IDENTITY_GLOBAL = "__spineCodexLocalIdentityV1";
   const SNAPSHOT_CACHE_KEY = "spine-codex.view.snapshots.v1";
   const THREAD_ALIASES_KEY = "spine-codex.view.thread-aliases";
   const SPAWN_INTENT_CACHE_KEY = "spine-codex.view.spawn-intents.v1";
@@ -29,7 +31,7 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "0.2.2.5";
+  const VERSION = "0.3.2.0";
   const RENDERER_REVISION = 10;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -134,6 +136,12 @@
     "settings.retry": "Retry",
     "settings.applies": "Changes apply only to new conversations.",
     "settings.toggle": "Toggle {label}",
+    "settings.hostIdentity": "{host} · SpineCodex {product} · Codex compatibility {compatibility}",
+    "settings.featureStatus": "Spawn default: {spawn} · Memory Projection: {memory}",
+    "settings.notReported": "not reported by host",
+    "settings.on": "On",
+    "settings.off": "Off",
+    "settings.notAvailable": "Unavailable",
     "feature.spine_jit.label": "Spine JIT",
     "feature.spine_jit.description": "Enable Spine task trees, node lifecycles, and context projection.",
     "feature.spine_trim.label": "Spine Trim",
@@ -221,6 +229,12 @@
       "settings.retry": "重试",
       "settings.applies": "更改只对新对话生效。",
       "settings.toggle": "切换 {label}",
+      "settings.hostIdentity": "{host} · SpineCodex {product} · Codex 兼容身份 {compatibility}",
+      "settings.featureStatus": "Spawn 默认：{spawn} · Memory Projection：{memory}",
+      "settings.notReported": "主机未报告",
+      "settings.on": "开",
+      "settings.off": "关",
+      "settings.notAvailable": "不可用",
       "feature.spine_jit.label": "Spine JIT",
       "feature.spine_jit.description": "启用 Spine 任务树、节点生命周期与上下文投影机制。",
       "feature.spine_trim.label": "Spine Trim",
@@ -4956,6 +4970,75 @@
       }));
   }
 
+  function validSettingsVersion(value) {
+    return typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)
+      ? value
+      : null;
+  }
+
+  function localSettingsIdentity() {
+    const identity = globalThis[LOCAL_IDENTITY_GLOBAL];
+    if (!identity || typeof identity !== "object") {
+      return { productVersion: null, compatibilityVersion: null };
+    }
+    return {
+      productVersion: validSettingsVersion(identity.productVersion),
+      compatibilityVersion: validSettingsVersion(identity.compatibilityVersion),
+    };
+  }
+
+  function settingsStatusModel(hostId, features = state.settingsFeatures) {
+    const normalizedHostId = typeof hostId === "string" && hostId
+      ? hostId.slice(0, 256)
+      : "local";
+    const selected = features instanceof Map
+      ? features
+      : new Map(
+          selectSpineSettingsFeatures(features)
+            .map((feature) => [feature.name, feature]),
+        );
+    const spawn = selected.get("spine_spawn");
+    const memory = selected.get("spinetree_memory_projection");
+    const identity = normalizedHostId === "local"
+      ? localSettingsIdentity()
+      : { productVersion: null, compatibilityVersion: null };
+    return {
+      hostId: normalizedHostId,
+      productVersion: identity.productVersion,
+      compatibilityVersion: identity.compatibilityVersion,
+      spawnDefaultEnabled: spawn ? spawn.defaultEnabled === true : null,
+      spawnEnabled: spawn ? spawn.enabled === true : null,
+      memoryProjectionEnabled: memory ? memory.enabled === true : null,
+    };
+  }
+
+  function settingsHostLabel(hostId) {
+    if (hostId === "local") return t("host.local");
+    return hostId.split(":").pop()?.trim() || hostId;
+  }
+
+  function settingsBooleanLabel(value) {
+    return value == null
+      ? t("settings.notAvailable")
+      : t(value ? "settings.on" : "settings.off");
+  }
+
+  function settingsIdentityText(status) {
+    return t("settings.hostIdentity", {
+      host: settingsHostLabel(status.hostId),
+      product: status.productVersion ?? t("settings.notReported"),
+      compatibility:
+        status.compatibilityVersion ?? t("settings.notReported"),
+    });
+  }
+
+  function settingsFeatureStatusText(status) {
+    return t("settings.featureStatus", {
+      spawn: settingsBooleanLabel(status.spawnDefaultEnabled),
+      memory: settingsBooleanLabel(status.memoryProjectionEnabled),
+    });
+  }
+
   function activeAgentSettingsPanel() {
     return document.querySelector?.(
       'button[data-settings-panel-slug="agent"][aria-current="page"]',
@@ -5200,7 +5283,17 @@
       "font-medium text-token-text-primary text-base",
       copy.title,
     );
-    headerStack.append(title);
+    const hostStatus = createElement(
+      "div",
+      "min-w-0 break-words text-xs leading-4 text-token-text-secondary",
+    );
+    hostStatus.dataset.spineSettingsHostStatus = "true";
+    const featureStatus = createElement(
+      "div",
+      "min-w-0 break-words text-xs leading-4 text-token-text-tertiary",
+    );
+    featureStatus.dataset.spineSettingsFeatureStatus = "true";
+    headerStack.append(title, hostStatus, featureStatus);
     header.append(headerStack);
 
     const content = createElement("div", "flex flex-col gap-1.5");
@@ -5229,6 +5322,8 @@
     state.settingsSavedFeature = null;
     state.settingsUi = {
       title,
+      hostStatus,
+      featureStatus,
       card,
     };
     renderSettings();
@@ -5344,6 +5439,10 @@
     if (!ui || !state.settingsSection?.isConnected) return;
     const copy = settingsCopy();
     ui.title.textContent = copy.title;
+    const status = settingsStatusModel(state.settingsHostId ?? "local");
+    ui.hostStatus.textContent = settingsIdentityText(status);
+    ui.hostStatus.title = status.hostId;
+    ui.featureStatus.textContent = settingsFeatureStatusText(status);
     let rows;
     if (state.settingsLoading) rows = [createSettingsStatusRow(copy.loading)];
     else if (state.settingsError) rows = [createSettingsStatusRow(copy.error, true)];
@@ -5381,6 +5480,11 @@
       return;
     }
     const epoch = ++state.settingsRequestEpoch;
+    if (state.settingsLoadedHostId !== hostId) {
+      state.settingsFeatures = new Map();
+      state.settingsAvailable = false;
+      state.settingsLoadedHostId = null;
+    }
     state.settingsHostId = hostId;
     state.settingsLoading = true;
     state.settingsError = null;
@@ -5896,6 +6000,7 @@
       return true;
     },
     selectSettingsFeatures: (features) => selectSpineSettingsFeatures(features),
+    settingsStatus: (hostId, features) => settingsStatusModel(hostId, features),
     resolveLocale: resolveCodexLocale,
     translate: (key, values) => t(key, values),
     refreshLocale,

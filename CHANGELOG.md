@@ -4,6 +4,27 @@
 
 ## Unreleased
 
+## v0.3.2.0 — 2026-08-24
+
+Compatibility release validated against SpineCodex 0.3.2 while retaining the
+SpineCodex 0.2.2 minimum.
+
+- Separates the SpineCodex product version from its Codex-compatible identity;
+  0.3.2 is reported alongside compatibility version 0.147.0.
+- Adds stable JSON diagnostics for Apps protocol capability, installed Desktop
+  identity, renderer integrity, and local/remote compatibility requirements.
+- Scans the installed macOS `app.asar` read-only and fails closed unless the
+  main process, version check, and local CLI selector contracts match uniquely.
+- Supports native `app/installed` and `app/read` in SpineCodex 0.3.2 while
+  preserving the paginated 0.2.2 `app/list` adapter.
+- Restores the stable `spine_spawn` feature in Settings, keeps beta Memory
+  Projection visible, and isolates local and remote host status.
+- Pins generated 0.3.2 Tree/Spawn schemas as contract fixtures and splits the
+  renderer into ordered source modules while preserving one byte-identical
+  injection artifact.
+- Keeps image generation disabled pending a dedicated end-to-end gate and does
+  not treat OpenAI Codex 0.149.1 as a SpineCodex baseline.
+
 ## v0.2.2.5 — 2026-08-14
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.

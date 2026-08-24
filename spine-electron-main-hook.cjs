@@ -18,6 +18,8 @@ const LOCAL_CLI_ERROR_MARKER =
   "Unable to locate the Codex CLI binary. Set CODEX_CLI_PATH or ensure the Electron resources include bin/codex.";
 const DEFAULT_HOOK_DEADLINE_MS = 30_000;
 const LOCAL_CLI_PATH_ENV = "SPINE_CODEX_LOCAL_CLI_PATH";
+const LOCAL_IDENTITY_ENV = "SPINE_CODEX_LOCAL_IDENTITY_JSON";
+const LOCAL_IDENTITY_GLOBAL = "__spineCodexLocalIdentityV1";
 const RENDERER_PATH_ENV = "SPINE_CODEX_RENDERER_PATH";
 const RENDERER_SHA256_ENV = "SPINE_CODEX_RENDERER_SHA256";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -398,11 +400,50 @@ function loadRendererPayload(options = {}) {
   if (actualSha256 !== expectedSha256) {
     throw new Error("SpineCodex renderer SHA-256 mismatch");
   }
+  const identityValue = Object.hasOwn(options, "localIdentity")
+    ? options.localIdentity
+    : process.env[LOCAL_IDENTITY_ENV];
+  const identityPrelude = rendererIdentityPrelude(identityValue);
   return Object.freeze({
     path: path.resolve(rendererPath),
-    source,
+    source: identityPrelude + source,
     sha256: actualSha256,
+    identityPrelude,
   });
+}
+
+function normalizeRendererIdentity(value) {
+  let identity = value;
+  if (typeof identity === "string") {
+    try {
+      identity = JSON.parse(identity);
+    } catch {
+      return null;
+    }
+  }
+  if (!identity || typeof identity !== "object" || Array.isArray(identity)) {
+    return null;
+  }
+  const productVersion = parseVersion(identity.productVersion)
+    ? String(identity.productVersion)
+    : null;
+  const compatibilityVersion = parseVersion(identity.compatibilityVersion)
+    ? String(identity.compatibilityVersion)
+    : null;
+  if (!productVersion && !compatibilityVersion) return null;
+  const mode = ["dual", "legacy", "compatibility-only"].includes(identity.mode)
+    ? identity.mode
+    : "compatibility-only";
+  return { mode, productVersion, compatibilityVersion };
+}
+
+function rendererIdentityPrelude(value) {
+  const identity = normalizeRendererIdentity(value);
+  if (!identity) return "";
+  return (
+    `Object.defineProperty(globalThis, ${JSON.stringify(LOCAL_IDENTITY_GLOBAL)}, {` +
+    `value: Object.freeze(${JSON.stringify(identity)}), configurable: true});\n`
+  );
 }
 
 function reloadRendererPayload(payload) {
@@ -420,8 +461,9 @@ function reloadRendererPayload(payload) {
   if (sha256 === payload.sha256) return payload;
   return Object.freeze({
     path: payload.path,
-    source,
+    source: (payload.identityPrelude ?? "") + source,
     sha256,
+    identityPrelude: payload.identityPrelude ?? "",
   });
 }
 
@@ -694,6 +736,8 @@ module.exports = {
   patchLocalCliSelectorSource,
   patchVersionCompatibilitySource,
   patchVersionBundleCandidateSource,
+  normalizeRendererIdentity,
+  rendererIdentityPrelude,
   writeHookStatus,
   isCodexMainSurfaceUrl,
   loadRendererPayload,

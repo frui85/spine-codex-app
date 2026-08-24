@@ -2,7 +2,7 @@
 
 > [简体中文](FEATURES_ZH.md) · **English**
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.2.2.5. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.2.0. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -19,8 +19,16 @@ Codex Desktop, and `spine-codex` in `PATH`.
 
 ```sh
 node spine-app.mjs --diagnose
+node spine-app.mjs --diagnose --json
 node spine-app.mjs /path/to/workspace
 ```
+
+The JSON diagnosis has a versioned schema. It separates the App version,
+SpineCodex product version, Codex-compatible identity, Apps protocol mode,
+Desktop version and bundle contract, renderer SHA-256, and remote minimum. If
+the npm product package cannot be resolved, the product version is `null`; the
+compatibility identity and live protocol probe still determine whether the
+binary can be used.
 
 Quit Codex Desktop completely before launching. The wrapper uses a random
 loopback-only CDP port, validates the renderer WebSocket, registers the
@@ -80,9 +88,11 @@ works in a non-interactive login shell:
 ssh <host> 'command -v spine-codex && spine-codex --version'
 ```
 
-Codex Desktop currently treats CLI `0.141.0` as its upstream minimum. A tiny
-Electron-main preload extends that compatibility check to SpineCodex `0.2.2`
-or newer while preserving the App's original acceptance rules. It identifies
+SpineCodex 0.3.2 reports the product release through
+`@spinejit/spine-codex/package.json` and reports `codex-cli 0.147.0` through
+`--version`. The launcher records these as separate product and compatibility
+identities. A tiny Electron-main preload extends Desktop's compatibility check
+to SpineCodex `0.2.2` or newer while preserving the App's original acceptance rules. It identifies
 the `src-*` version bundle by the stable unsupported-version error prefix and
 comparator structure—not by generated export names such as `wc` or `mc`.
 
@@ -123,12 +133,26 @@ finishes loading; they do not poll. Unknown structures, a missing renderer
 recovery registration, or a renderer hash mismatch fail closed with an
 explicit startup error. No `app.asar` file or App signature is modified.
 
-SpineCodex's `--version` output is parsed honestly for the compatibility gate.
+On macOS, diagnosis also reads the installed `app.asar` index without
+extracting or modifying it. Exactly one SSH-owning main bundle, one version
+check, and one local CLI selector must match, and the latter two must share the
+same `src-*` bundle used by the runtime hook. The result includes the Desktop
+version and candidate filenames. Windows keeps the equivalent runtime
+Inspector handshake because Store package activation can hide the effective
+Electron archive from the launcher.
+
+SpineCodex's product package and `--version` output are parsed independently for the compatibility gate.
 The native connection card can still show an upstream core/app-server version
-such as `0.144.6`, because that value comes from the connected app-server's
+such as `0.147.0`, because that value comes from the connected app-server's
 initialize handshake rather than from the CLI probe. It does not mean the
 remote executable was official Codex; the actual SSH command and process
 identity are the authoritative backend check.
+
+The local shim probes `app/installed` followed by `app/read`. SpineCodex 0.3.2
+uses this path natively. A backend that explicitly rejects either method uses
+the retained, paginated `app/list` compatibility adapter; other errors are
+reported as unavailable instead of being silently converted. Diagnostics name
+these modes `native`, `legacy-fallback`, and `unavailable`.
 
 If a remote host does not contain `spine-codex`, the App's native missing-CLI
 screen still calls its official Codex installer. Do not use that installer for
@@ -322,12 +346,19 @@ The section follows the host selected at the top of Codex Settings. Local and
 remote hosts have independent `config.toml` files: changing a local switch
 does not change the same switch on a connected remote host. The renderer reads
 each host's own catalog through `experimentalFeature/list`, selects the stable
-`spine_jit` and `spine_trim` controls plus beta features owned by SpineCodex
+`spine_jit`, `spine_trim`, and `spine_spawn` controls plus beta features owned by SpineCodex
 (`spine_*` or `spinetree_*`), and writes the selected `features.<name>` key
 through Codex's normal `config/batchWrite` flow. This also lets future
 SpineCodex beta features appear without a renderer release. The section is
 shown only on the Agent settings page, performs no polling, and issues no
 requests while Settings is closed.
+
+The section header reports the selected host, Spawn default, and Memory
+Projection state. For the local host it also displays the launcher-verified
+SpineCodex product and Codex compatibility versions. Desktop currently exposes
+only the remote host ID during this bootstrap, so remote versions are shown as
+not reported rather than copied from local diagnosis. Switching hosts clears
+the prior feature snapshot before requesting the selected host's catalog.
 
 SpineCodex reloads the latest config whenever a new thread starts, so a full
 App restart is not required. The switch deliberately leaves already-running
@@ -379,8 +410,14 @@ context nodes converge into one memory capsule. It uses `currentColor` only,
 so it follows Codex's native light and dark themes without a separate image
 asset.
 
+The checked-in `spine-view.js` remains the single injected artifact. Its source
+is maintained as ordered responsibility modules under `renderer/`; `npm run
+build:renderer` concatenates them atomically, and `npm run check` rejects any
+byte drift between the modules and the release artifact.
+
 Options:
 
 - `--spine-codex PATH`: choose the existing SpineCodex binary.
 - `--app PATH`: choose the Codex/ChatGPT app bundle.
 - `--diagnose`: validate paths and versions without launching.
+- `--diagnose --json`: emit the versioned machine-readable compatibility report.

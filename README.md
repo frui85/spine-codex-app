@@ -12,17 +12,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.5"><img alt="Release v0.2.2.5" src="https://img.shields.io/badge/release-v0.2.2.5-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.3.2.0"><img alt="Release v0.3.2.0" src="https://img.shields.io/badge/release-v0.3.2.0-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
-  <img alt="SpineCodex 0.2.2+" src="https://img.shields.io/badge/SpineCodex-0.2.2%2B-17171B?style=flat-square">
+  <img alt="SpineCodex 0.3.2 recommended" src="https://img.shields.io/badge/SpineCodex-0.3.2%20recommended-17171B?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -72,7 +72,7 @@ Live Spawn progress is reconciled with the final closed Spine nodes. Child agent
 
 ## Configured like a native feature
 
-Spine controls live directly below Codex's Model features. Settings are host-aware, so local and SSH-connected environments keep independent values.
+Spine controls live directly below Codex's Model features. Settings are host-aware, so local and SSH-connected environments keep independent values. The header reports the local SpineCodex product and Codex compatibility versions; remote hosts keep independent feature state without borrowing local version claims.
 
 ![Spine feature controls embedded in Codex Model features](docs/media/spine-settings.png)
 
@@ -92,7 +92,7 @@ The full cache limits, rendering contracts, navigation behavior, and performance
 
 - macOS 14 or newer, or Windows 10 build 17763 or newer
 - The current [ChatGPT desktop app with Codex](https://chatgpt.com/download/)
-- SpineCodex 0.2.2 or newer:
+- SpineCodex 0.2.2 or newer; 0.3.2 is the recommended and validated baseline:
 
 ```sh
 npm install -g @spinejit/spine-codex@latest
@@ -105,8 +105,8 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.2.5-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.2.5-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.5/SpineCodex-App-v0.2.2.5-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v0.3.2.0-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v0.3.2.0-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.3.2.0/SpineCodex-App-v0.3.2.0-macos-x64.dmg) |
 
 The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
@@ -139,7 +139,12 @@ Explicit `--app` and `--spine-codex` options remain available for development an
 
 ```sh
 ./spine-app --diagnose
+./spine-app --diagnose --json
 ```
+
+The JSON form reports the App version, SpineCodex product and Codex
+compatibility identities, Apps protocol mode, Desktop bundle contract,
+renderer checksum, and local/remote compatibility requirements.
 
 </details>
 
@@ -190,11 +195,13 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-The first three release components track the minimum supported SpineCodex release; a fourth component identifies wrapper-only revisions. This release is **v0.2.2.5** and still requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
+This release is **v0.3.2.0**: the first three components identify the recommended SpineCodex validation baseline, and the fourth identifies an App-only revision. The compatibility floor remains SpineCodex 0.2.2. Product version, Codex-compatible identity, and minimum support are separate fields; version tracking does not mean SpineCodex is redistributed here.
 
 Pushing a matching `v*` tag starts the checked-in GitHub Actions release pipeline. The workflow validates the tag against `package.json#spineAppVersion`, runs the full checks, builds and verifies both macOS DMGs, uploads immutable workflow artifacts, and only then publishes the GitHub Release. Release creation begins as a draft so a failed upload cannot expose a partial release. Windows workflow code is present but intentionally disabled.
 
-The macOS wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, `26.730.61309`, `26.730.61639`, and `26.803.41515`. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the new main-process Inspector path is awaiting another real-device run and is not yet claimed as a supported GitHub Release asset. Codex internals can change, so compatibility-sensitive hooks identify both the SSH bootstrap and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
+The current bundle contract is validated against ChatGPT/Codex Desktop builds `26.810.41047` and `26.818.41509`. Diagnostics scan the installed macOS `app.asar` read-only and require exactly one main-process patch target plus one shared version/CLI-selector target. Unknown or ambiguous structures fail closed. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the main-process Inspector path still requires broader real-device validation before Windows is published as a supported GitHub Release asset.
+
+SpineCodex 0.3.2 reports product version `0.3.2` and Codex-compatible identity `0.147.0`; the App records both. OpenAI Codex `0.149.1` is not a SpineCodex validation baseline for this release. Image generation remains disabled pending a separate end-to-end generation, replay, Tree-update, and recovery gate. The machine-readable matrix is checked in as [`compatibility.json`](compatibility.json).
 
 ```sh
 npm run check

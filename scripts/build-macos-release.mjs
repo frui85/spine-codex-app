@@ -87,11 +87,17 @@ async function build(architecture) {
   await copyFile(join(extracted, nodeDirectory, "bin", "node"), join(runtime, "node"));
   await chmod(join(runtime, "node"), 0o755);
   await copyFile(join(extracted, nodeDirectory, "LICENSE"), join(licenses, "Node-LICENSE"));
+  // Hosted macOS runners have limited free space. Once the verified runtime
+  // and license are copied, retaining the archive and full Node tree only
+  // increases peak usage while the second architecture is assembled.
+  await rm(extracted, { recursive: true, force: true });
+  await rm(nodeArchive, { force: true });
 
   for (const name of [
     "spine-app.mjs",
     "spine-view.js",
     "spine-electron-main-hook.cjs",
+    "compatibility.json",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
   ]) {
@@ -110,6 +116,14 @@ async function build(architecture) {
     join(ROOT, "lib", "app-server-protocol-adapter.mjs"),
     join(wrapper, "lib", "app-server-protocol-adapter.mjs"),
   );
+  await copyFile(
+    join(ROOT, "lib", "spine-codex-compatibility.mjs"),
+    join(wrapper, "lib", "spine-codex-compatibility.mjs"),
+  );
+  await copyFile(
+    join(ROOT, "lib", "desktop-bundle-contract.mjs"),
+    join(wrapper, "lib", "desktop-bundle-contract.mjs"),
+  );
   await chmod(join(wrapper, "bin", "spine-codex"), 0o755);
 
   await writeFile(join(macos, BUNDLE_NAME), appLauncher(), { mode: 0o755 });
@@ -122,6 +136,7 @@ async function build(architecture) {
   await mkdir(stage, { recursive: true });
   await cp(app, join(stage, `${BUNDLE_NAME}.app`), { recursive: true });
   await symlink("/Applications", join(stage, "Applications"));
+  await rm(app, { recursive: true, force: true });
   await rm(dmg, { force: true });
   await run("/usr/bin/hdiutil", [
     "create",

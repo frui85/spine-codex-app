@@ -1,0 +1,905 @@
+  function isFloatingSummarySurface(surface) {
+    return Boolean(
+      surface?.matches?.(
+        '[data-slot="popover-content"][role="dialog"][data-state="open"]',
+      ) &&
+      surface.querySelector(
+        '[data-slot="thread-summary-panel-section-actions"]',
+      ) &&
+      surface.querySelector("button.group\\/section-toggle"),
+    );
+  }
+
+  function containsStructuredSummarySections(surface) {
+    return Boolean(
+      surface?.querySelector?.(
+        '[data-slot="thread-summary-panel-section-actions"]',
+      ) && surface.querySelector("button.group\\/section-toggle"),
+    );
+  }
+
+  function visibleElementRect(element) {
+    if (!element?.isConnected) return null;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return null;
+    const style = getComputedStyle(element);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      Number.parseFloat(style.opacity || "1") < 0.05
+    ) {
+      return null;
+    }
+    return rect;
+  }
+
+  function rectIntersectionRatio(left, right) {
+    const width = Math.max(
+      0,
+      Math.min(left.right, right.right) - Math.max(left.left, right.left),
+    );
+    const height = Math.max(
+      0,
+      Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top),
+    );
+    const smallerArea = Math.max(
+      1,
+      Math.min(left.width * left.height, right.width * right.height),
+    );
+    return (width * height) / smallerArea;
+  }
+
+  function containsSummarySectionGroup(surface) {
+    if (!surface?.querySelectorAll) return false;
+    if (surface.querySelector("#spine-codex-view")) return true;
+    const sectionParents = new Map();
+    for (const section of surface.querySelectorAll("section")) {
+      const parent = section.parentElement;
+      if (!parent) continue;
+      sectionParents.set(parent, (sectionParents.get(parent) ?? 0) + 1);
+    }
+    if (
+      [...sectionParents].some(([parent, count]) =>
+        count >= 2 || (count === 1 && parent.querySelectorAll("button").length >= 2))
+    ) {
+      return true;
+    }
+    return [...surface.querySelectorAll("div")].some((container) => {
+      const children = [...container.children];
+      if (children.length < 2 || children.length > 16) return false;
+      return children.filter((child) => child.querySelector?.("button")).length >= 2;
+    });
+  }
+
+  function isGeometricSummarySurface(surface, marker) {
+    if (!surface || surface === marker || surface.contains(marker)) return false;
+    const markerRect = marker.getBoundingClientRect();
+    const surfaceRect = visibleElementRect(surface);
+    if (!surfaceRect || markerRect.width < 120 || markerRect.height < 40) return false;
+    if (
+      surfaceRect.width < 180 ||
+      surfaceRect.width > 460 ||
+      Math.abs(surfaceRect.width - markerRect.width) > Math.max(80, markerRect.width * 0.35) ||
+      surfaceRect.width * surfaceRect.height > markerRect.width * markerRect.height * 2.5 ||
+      rectIntersectionRatio(surfaceRect, markerRect) < 0.65
+    ) {
+      return false;
+    }
+    return containsSummarySectionGroup(surface);
+  }
+
+  function geometricSummarySurfaces(marker) {
+    const candidates = new Set();
+    for (const sibling of marker.parentElement?.children ?? []) {
+      if (isGeometricSummarySurface(sibling, marker)) candidates.add(sibling);
+    }
+    const rect = marker.getBoundingClientRect();
+    const points = [
+      [rect.left + rect.width / 2, rect.top + Math.min(24, rect.height / 2)],
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.left + rect.width / 2, rect.bottom - Math.min(24, rect.height / 2)],
+    ];
+    for (const [x, y] of points) {
+      for (const hit of document.elementsFromPoint?.(x, y) ?? []) {
+        for (
+          let current = hit, depth = 0;
+          current && current !== document.body && depth < 7;
+          current = current.parentElement, depth += 1
+        ) {
+          if (isGeometricSummarySurface(current, marker)) candidates.add(current);
+        }
+      }
+    }
+    return [...candidates];
+  }
+
+  function pinnedSummarySurfaces() {
+    const surfaces = [];
+    for (const marker of document.querySelectorAll(
+      '[data-pip-obstacle="thread-summary-panel"]',
+    )) {
+      if (containsStructuredSummarySections(marker)) surfaces.push(marker);
+      for (const sibling of marker.parentElement?.children ?? []) {
+        if (sibling !== marker && containsStructuredSummarySections(sibling)) {
+          surfaces.push(sibling);
+        }
+      }
+      surfaces.push(...geometricSummarySurfaces(marker));
+    }
+    return [...new Set(surfaces)].filter((surface) => surface.isConnected);
+  }
+
+  function summarySurfaceFor(element) {
+    const floating = element?.closest?.(
+      '[data-slot="popover-content"][role="dialog"][data-state="open"]',
+    );
+    if (isFloatingSummarySurface(floating)) return floating;
+    const marker = element?.closest?.(
+      '[data-pip-obstacle="thread-summary-panel"]',
+    );
+    if (marker && containsStructuredSummarySections(marker)) return marker;
+    return pinnedSummarySurfaces().find((surface) =>
+      surface.contains(element)) ?? null;
+  }
+
+  function summaryPanels() {
+    return [
+      ...new Set([
+        ...pinnedSummarySurfaces(),
+        ...[
+          ...document.querySelectorAll(
+            '[data-slot="popover-content"][role="dialog"][data-state="open"]',
+          ),
+        ].filter(isFloatingSummarySurface),
+      ]),
+    ].filter((panel) => panel.isConnected);
+  }
+
+  function summaryContainerMetrics(container) {
+    if (!container?.isConnected) return null;
+    const panel = summarySurfaceFor(container);
+    if (!panel) return null;
+    const rect = container.getBoundingClientRect();
+    const viewportWidth =
+      document.documentElement.clientWidth || innerWidth;
+    const viewportHeight =
+      document.documentElement.clientHeight || innerHeight;
+    if (
+      rect.width < 180 ||
+      rect.width > 420 ||
+      rect.height < 24
+    ) {
+      return null;
+    }
+    const visibleWidth = Math.max(
+      0,
+      Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0),
+    );
+    const visibleHeight = Math.max(
+      0,
+      Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0),
+    );
+    if (
+      visibleWidth < Math.min(120, rect.width * 0.45) ||
+      visibleHeight < 24
+    ) {
+      return null;
+    }
+    let opacity = 1;
+    let highestZIndex = 0;
+    for (
+      let current = panel, depth = 0;
+      current && current !== document.body && depth < 9;
+      current = current.parentElement, depth += 1
+    ) {
+      if (
+        current.hasAttribute?.("inert") ||
+        current.getAttribute?.("aria-hidden") === "true"
+      ) {
+        return null;
+      }
+      const style = getComputedStyle(current);
+      if (style.display === "none" || style.visibility === "hidden") {
+        return null;
+      }
+      const currentOpacity = Number.parseFloat(style.opacity);
+      if (Number.isFinite(currentOpacity)) opacity *= currentOpacity;
+      const zIndex = Number.parseFloat(style.zIndex);
+      if (Number.isFinite(zIndex)) highestZIndex = Math.max(highestZIndex, zIndex);
+    }
+    if (opacity < 0.05) return null;
+    const containerStyle = getComputedStyle(container);
+    if (
+      containerStyle.display === "none" ||
+      containerStyle.visibility === "hidden" ||
+      containerStyle.pointerEvents === "none"
+    ) {
+      return null;
+    }
+    const area = Math.max(1, rect.width * rect.height);
+    const visibleRatio = (visibleWidth * visibleHeight) / area;
+    const probeX = Math.max(
+      0,
+      Math.min(viewportWidth - 1, rect.left + rect.width / 2),
+    );
+    const probeY = Math.max(
+      0,
+      Math.min(viewportHeight - 1, rect.top + Math.min(18, rect.height / 2)),
+    );
+    const hit = document.elementFromPoint?.(probeX, probeY);
+    const topmost = Boolean(hit && container.contains(hit));
+    const current = state.ui?.host.parentElement === container;
+    return {
+      panel,
+      score:
+        (topmost ? 10_000 : 0) +
+        opacity * 1_000 +
+        visibleRatio * 100 +
+        highestZIndex * 0.1 +
+        (current ? 1 : 0) -
+        Math.abs(rect.top - 60) * 0.02,
+    };
+  }
+
+  function findSummaryContainer() {
+    const candidates = [];
+    for (const panel of summaryPanels()) {
+      const containers = new Set();
+      for (const button of panel.querySelectorAll("button")) {
+        const section = button.closest("section");
+        if (section?.parentElement) containers.add(section.parentElement);
+      }
+      const sectionParents = new Map();
+      for (const section of panel.querySelectorAll("section")) {
+        const parent = section.parentElement;
+        if (!parent) continue;
+        sectionParents.set(parent, (sectionParents.get(parent) ?? 0) + 1);
+      }
+      for (const [container, count] of sectionParents) {
+        if (count >= 2) containers.add(container);
+      }
+      const existingHost = panel.querySelector("#spine-codex-view");
+      if (existingHost?.parentElement) containers.add(existingHost.parentElement);
+      for (const container of panel.querySelectorAll("div")) {
+        const children = [...container.children];
+        if (children.length < 2 || children.length > 16) continue;
+        if (children.filter((child) => child.querySelector?.("button")).length < 2) {
+          continue;
+        }
+        containers.add(container);
+      }
+      for (const container of containers) {
+        if (candidates.some((item) => item.container === container)) continue;
+        const sections = [...container.children].filter(
+          (child) => child.tagName === "SECTION",
+        ).length;
+        const metrics = summaryContainerMetrics(container);
+        if (!metrics) continue;
+        candidates.push({
+          container,
+          score: metrics.score + sections * 25,
+        });
+      }
+    }
+    candidates.sort((left, right) => right.score - left.score);
+    return candidates[0]?.container ?? null;
+  }
+
+  function belongsToSummaryPanel(container) {
+    return Boolean(summarySurfaceFor(container));
+  }
+
+  function isValidSummaryContainer(container) {
+    return Boolean(summaryContainerMetrics(container));
+  }
+
+  function createUi(container) {
+    const host = document.createElement("section");
+    host.id = "spine-codex-view";
+    host.className =
+      "relative z-0 flex flex-col pb-3 after:absolute after:inset-x-3.5 after:bottom-0 " +
+      "after:h-[0.5px] after:bg-token-border-default after:content-[''] last:after:hidden last:pb-0";
+    host.style.pointerEvents = "auto";
+    host.style.contain = "layout style";
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML = `
+      <style>
+        :host { display: block; color: var(--color-token-text-primary, inherit); font-family: inherit;
+          color-scheme: light dark; }
+        * { box-sizing: border-box; }
+        button { font: inherit; }
+        .heading-row { min-height: 28px; display: flex; align-items: center;
+          padding-right: 7px; }
+        .heading { min-width: 0; flex: 1; min-height: 28px; display: flex; align-items: center; gap: 6px;
+          padding: 1px 4px 1px 11px; border: 0; background: transparent;
+          color: var(--color-token-text-tertiary, currentColor); cursor: pointer; text-align: left;
+          transition: color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)); }
+        .heading:focus-visible { outline: 2px solid var(--color-token-focus-border, currentColor);
+          outline-offset: -2px; border-radius: 6px; }
+        .glyph { width: 16px; height: 16px; flex: none;
+          color: var(--color-token-text-tertiary, currentColor);
+          fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round;
+          stroke-linejoin: round; }
+        .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+          font-size: 14px; line-height: 21px; font-weight: inherit; letter-spacing: normal; }
+        .chevron { width: 13px; height: 13px; margin-left: 1px; opacity: 0;
+          transition: transform var(--default-transition-duration, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            opacity var(--default-transition-duration, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)); }
+        .heading:hover .chevron, .heading:focus-visible .chevron { opacity: 1; }
+        :host([data-expanded="false"]) .chevron { transform: rotate(-90deg); }
+        .content-motion { display: grid; grid-template-rows: 1fr; opacity: 1; margin-top: 2px;
+          transition: grid-template-rows var(--transition-duration-relaxed, .3s)
+            var(--ease-enter, cubic-bezier(.19, 1, .22, 1)),
+            opacity var(--transition-duration-relaxed, .3s)
+            var(--ease-enter, cubic-bezier(.19, 1, .22, 1)),
+            margin-top var(--transition-duration-relaxed, .3s)
+            var(--ease-enter, cubic-bezier(.19, 1, .22, 1)); }
+        :host([data-expanded="false"]) .content-motion {
+          grid-template-rows: 0fr; opacity: 0; margin-top: 0; pointer-events: none; }
+        .content-clip { min-height: 0; overflow: hidden; }
+        .content { padding: 1px 10px 2px 11px; content-visibility: auto; contain: layout style; }
+        .tree-motion { position: relative; min-width: 0; }
+        .tree { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+        .row { --depth: 0; position: relative; min-height: 23px; display: grid;
+          width: calc(100% - var(--depth) * 14px);
+          grid-template-columns: 16px minmax(0, 1fr) auto 13px;
+          align-items: start; gap: 5px; border: 0; background: transparent; text-align: left;
+          margin-left: calc(var(--depth) * 14px); padding: 2px 4px 2px 2px; border-radius: 5px;
+          color: var(--color-token-text-secondary, currentColor); font-size: 12.5px; line-height: 19px;
+          cursor: pointer; transform-origin: center;
+          transition: background-color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            color var(--transition-duration-basic, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            scale var(--transition-duration-basic, .15s)
+            var(--ease-out, cubic-bezier(0, 0, .2, 1)); }
+        .row:active { scale: .98; }
+        .row[data-depth]:not([data-depth="0"])::before { content: ""; position: absolute;
+          left: -8px; top: -2px; width: 7px; height: 13px;
+          border-left: 1px solid var(--color-token-border-default, color-mix(in srgb, currentColor 18%, transparent));
+          border-bottom: 1px solid var(--color-token-border-default, color-mix(in srgb, currentColor 18%, transparent));
+          border-radius: 0 0 0 4px; pointer-events: none; }
+        .row:hover { background: var(--color-token-list-hover-background,
+          color-mix(in srgb, currentColor 6%, transparent)); }
+        .row:focus-visible { outline: 2px solid var(--color-token-focus-border, currentColor);
+          outline-offset: -2px; }
+        .row.active, .row.selected { color: var(--color-token-text-primary, currentColor); }
+        .row.limit { cursor: default; grid-template-columns: 16px minmax(0, 1fr); }
+        .row.limit:hover { background: transparent; }
+        .row.context-history { min-height: 25px; margin-bottom: 2px; padding-top: 3px; padding-bottom: 3px;
+          color: var(--color-token-text-tertiary, currentColor); }
+        .row.context-history .label, .row.context-epoch .label {
+          font-size: 11.5px; line-height: 19px; font-weight: 500; }
+        .row.context-epoch { color: var(--color-token-text-tertiary, currentColor); }
+        .row-meta { color: var(--color-token-text-tertiary, currentColor);
+          font-size: 10.5px; line-height: 19px; white-space: nowrap; }
+        .status-icon { width: 16px; height: 19px; display: grid; place-items: center;
+          color: var(--color-token-text-tertiary, currentColor); }
+        .status-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
+          stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
+        .status-icon .fill { fill: currentColor; stroke: none; }
+        .status-icon.live { color: var(--color-token-text-primary, currentColor); }
+        .status-icon.done { color: var(--color-icon-success, #00a240); }
+        .status-icon.error { color: var(--color-icon-error,
+          var(--color-token-error-foreground, #e02e2a)); }
+        .status-icon.warning { color: var(--color-icon-warning,
+          var(--color-token-editor-warning-foreground, #e25507)); }
+        .status-icon.muted { color: var(--color-token-text-tertiary,
+          color-mix(in srgb, currentColor 50%, transparent)); }
+        .label { min-width: 0; overflow-wrap: anywhere; }
+        .row-affordance { width: 13px; height: 19px; display: grid; place-items: center;
+          color: var(--color-token-text-tertiary, currentColor); opacity: 0;
+          transition: opacity var(--default-transition-duration, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
+            transform var(--default-transition-duration, .15s)
+            var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)); }
+        .row-affordance svg { width: 12px; height: 12px; fill: none; stroke: currentColor;
+          stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+        .row:hover .row-affordance, .row:focus-visible .row-affordance,
+        .row.selected .row-affordance, .row.bucket .row-affordance,
+        .row.context-history .row-affordance,
+        .row.context-epoch .row-affordance { opacity: 1; }
+        .row[aria-expanded="true"] .row-affordance { transform: rotate(90deg); }
+        .empty { padding: 9px 4px 11px; color: var(--color-token-text-tertiary, currentColor);
+          font-size: 12.5px; line-height: 18px; }
+        footer { padding: 5px 3px 1px; color: var(--color-token-text-tertiary, currentColor);
+          font-size: 11px; line-height: 15px; }
+        @media (prefers-reduced-motion: reduce) {
+          .heading, .chevron, .content-motion, .row, .row-affordance { transition: none; }
+          .row:active { scale: 1; }
+        }
+      </style>
+      <div class="heading-row">
+        <button class="heading" type="button" aria-expanded="true">
+          <svg class="glyph" viewBox="0 0 20 20" aria-hidden="true">
+            ${SPINE_LOGO_MARKUP}
+          </svg>
+          <span class="title">Spine Tree</span>
+          <svg class="chevron" viewBox="0 0 20 20" aria-hidden="true"><path fill="currentColor" d="M4.2 7.2a.75.75 0 0 1 1.06 0L10 11.94l4.74-4.74a.75.75 0 1 1 1.06 1.06l-5.27 5.27a.75.75 0 0 1-1.06 0L4.2 8.26a.75.75 0 0 1 0-1.06Z"/></svg>
+        </button>
+      </div>
+      <div class="content-motion">
+        <div class="content-clip">
+          <div class="content"><div class="tree-motion"><div class="tree"></div></div><footer></footer></div>
+        </div>
+      </div>`;
+    const heading = root.querySelector(".heading");
+    const contentMotion = root.querySelector(".content-motion");
+    const setExpanded = (expanded) => {
+      state.expanded = expanded;
+      host.dataset.expanded = String(expanded);
+      heading.setAttribute("aria-expanded", String(expanded));
+      contentMotion.toggleAttribute("inert", !expanded);
+      contentMotion.setAttribute("aria-hidden", String(!expanded));
+      writeExpandedState();
+      if (expanded) scheduleRender();
+      else if (state.frame) {
+        cancelAnimationFrame(state.frame);
+        state.frame = 0;
+      }
+    };
+    heading.addEventListener("click", () => setExpanded(!state.expanded));
+    root.querySelector(".tree").addEventListener("click", onTreeClick);
+    state.ui = {
+      host,
+      root,
+      tree: root.querySelector(".tree"),
+      treeMotion: root.querySelector(".tree-motion"),
+      contentMotion,
+      footer: root.querySelector("footer"),
+      setExpanded,
+    };
+    host.dataset.expanded = String(state.expanded);
+    heading.setAttribute("aria-expanded", String(state.expanded));
+    contentMotion.toggleAttribute("inert", !state.expanded);
+    contentMotion.setAttribute("aria-hidden", String(!state.expanded));
+    container.prepend(host);
+    connectPanelObserver(container);
+    if (state.expanded) renderActiveNow();
+  }
+
+  function mountUi() {
+    if (!document.body || state.destroyed) return false;
+    connectSummarySurfaceObserver();
+    const container = findSummaryContainer();
+    if (!container) {
+      if (
+        state.ui?.host.isConnected &&
+        !isValidSummaryContainer(state.ui.host.parentElement)
+      ) {
+        state.ui.host.remove();
+      }
+      return false;
+    }
+    let reattached = false;
+    if (!state.ui) createUi(container);
+    else if (state.ui.host.parentElement !== container) {
+      container.prepend(state.ui.host);
+      reattached = true;
+    }
+    connectPanelObserver(container);
+    if (reattached && state.expanded) renderActiveNow();
+    return true;
+  }
+
+  function scheduleMount(attempts = 24) {
+    if (state.destroyed) return;
+    state.mountAttempts = Math.max(state.mountAttempts, attempts);
+    if (state.mountFrame) return;
+    const attempt = () => {
+      state.mountFrame = 0;
+      if (mountUi()) {
+        state.mountAttempts = 0;
+        return;
+      }
+      state.mountAttempts -= 1;
+      if (state.mountAttempts > 0) state.mountFrame = requestAnimationFrame(attempt);
+    };
+    state.mountFrame = requestAnimationFrame(attempt);
+  }
+
+  function ensureMounted(attempts = 24) {
+    connectSummarySurfaceObserver();
+    const container = findSummaryContainer();
+    if (
+      container &&
+      state.ui?.host.isConnected &&
+      state.ui.host.parentElement === container &&
+      isValidSummaryContainer(container)
+    ) {
+      return true;
+    }
+    if (mountUi()) return true;
+    scheduleMount(attempts);
+    return false;
+  }
+
+  function connectPanelObserver(container) {
+    const root = container.parentElement ?? container;
+    if (state.panelRoot === root) return;
+    state.panelObserver?.disconnect();
+    state.panelRoot = root;
+    state.panelObserver = new MutationObserver(queueSummaryMount);
+    state.panelObserver.observe(container, { childList: true });
+    if (root !== container) state.panelObserver.observe(root, { childList: true });
+  }
+
+  function queueSummaryMount() {
+    if (state.summaryMountQueued || state.destroyed) return;
+    state.summaryMountQueued = true;
+    queueMicrotask(() => {
+      state.summaryMountQueued = false;
+      connectSummarySurfaceObserver();
+      ensureMounted(24);
+    });
+  }
+
+  function stopSummaryTriggerObserver() {
+    state.summaryTriggerObserver?.disconnect();
+    state.summaryTriggerObserver = null;
+    if (state.summaryTriggerTimer) clearTimeout(state.summaryTriggerTimer);
+    state.summaryTriggerTimer = 0;
+  }
+
+  function settleSummaryTrigger() {
+    if (state.destroyed) {
+      stopSummaryTriggerObserver();
+      return;
+    }
+    connectSummarySurfaceObserver();
+    if (mountUi()) {
+      stopSummaryTriggerObserver();
+      return;
+    }
+    scheduleMount(120);
+  }
+
+  function armSummaryTriggerObserver() {
+    if (!document.body || typeof MutationObserver !== "function") {
+      scheduleMount(120);
+      return;
+    }
+    stopSummaryTriggerObserver();
+    state.summaryTriggerObserver = new MutationObserver(() => {
+      if (!summaryPanels().length) return;
+      queueMicrotask(settleSummaryTrigger);
+    });
+    state.summaryTriggerObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["style", "class", "aria-hidden", "inert"],
+    });
+    state.summaryTriggerTimer = setTimeout(stopSummaryTriggerObserver, 3_000);
+    queueMicrotask(() => {
+      connectSummarySurfaceObserver();
+      ensureMounted(12);
+    });
+  }
+
+  function isTopToolbarLayoutButton(button) {
+    if (!button || button.tagName !== "BUTTON") return false;
+    if (!button.querySelector("svg")) return false;
+    const rect = button.getBoundingClientRect();
+    if (
+      rect.width < 20 ||
+      rect.width > 52 ||
+      rect.height < 20 ||
+      rect.height > 52 ||
+      rect.top < -4 ||
+      rect.bottom > 84
+    ) {
+      return false;
+    }
+    return rect.right >= document.documentElement.clientWidth * 0.4;
+  }
+
+  function connectSummarySurfaceObserver() {
+    if (typeof MutationObserver !== "function") return;
+    const panels = summaryPanels();
+    if (
+      panels.length === state.summarySurfacePanels.length &&
+      panels.every((panel, index) =>
+        panel === state.summarySurfacePanels[index])
+    ) {
+      return;
+    }
+    state.summarySurfaceObserver?.disconnect();
+    state.summarySurfacePanels = panels;
+    if (!panels.length) {
+      state.summarySurfaceObserver = null;
+      return;
+    }
+    state.summarySurfaceObserver = new MutationObserver(queueSummaryMount);
+    const targets = new Set();
+    for (const panel of panels) {
+      targets.add(panel);
+      if (panel.parentElement) targets.add(panel.parentElement);
+      if (panel.parentElement?.parentElement) {
+        targets.add(panel.parentElement.parentElement);
+      }
+    }
+    for (const target of targets) {
+      state.summarySurfaceObserver.observe(target, {
+        childList: true,
+        attributes: true,
+        attributeFilter: ["style", "class", "aria-hidden", "inert"],
+      });
+    }
+  }
+
+  function prefersReducedMotion() {
+    return Boolean(
+      typeof matchMedia === "function" &&
+      matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  function cssDurationMilliseconds(value, fallback) {
+    const normalized = String(value ?? "").trim();
+    const number = Number.parseFloat(normalized);
+    if (!Number.isFinite(number) || number < 0) return fallback;
+    if (normalized.endsWith("ms")) return number;
+    if (normalized.endsWith("s")) return number * 1_000;
+    return fallback;
+  }
+
+  function nativeTreeMotionSpec() {
+    const style = getComputedStyle(state.ui?.host ?? document.documentElement);
+    return {
+      duration: cssDurationMilliseconds(
+        style.getPropertyValue("--transition-duration-relaxed"),
+        300,
+      ),
+      easing:
+        style.getPropertyValue("--cubic-enter").trim() ||
+        "cubic-bezier(.19, 1, .22, 1)",
+    };
+  }
+
+  function finishTreeMotion() {
+    if (state.treeMotionTimer) clearTimeout(state.treeMotionTimer);
+    state.treeMotionTimer = 0;
+    state.treeMotionToken += 1;
+    const motion = state.ui?.treeMotion;
+    if (!motion) return;
+    for (const animation of motion.getAnimations?.({ subtree: true }) ?? []) {
+      animation.cancel();
+    }
+    for (const ghost of motion.querySelectorAll("[data-spine-motion-ghost]")) {
+      ghost.remove();
+    }
+    motion.style.removeProperty("height");
+    motion.style.removeProperty("overflow");
+    motion.style.removeProperty("transition");
+  }
+
+  function captureTreeMotion() {
+    finishTreeMotion();
+    const motion = state.ui?.treeMotion;
+    if (!motion?.isConnected || prefersReducedMotion()) return null;
+    const motionRect = motion.getBoundingClientRect();
+    const rows = new Map();
+    for (const [key, row] of state.rows) {
+      if (row.isConnected && row.parentElement === state.ui.tree) {
+        rows.set(key, { row, rect: row.getBoundingClientRect() });
+      }
+    }
+    return {
+      height: motionRect.height,
+      motionRect,
+      rows,
+    };
+  }
+
+  function animateTreeProjection(before, liveKeys) {
+    const motion = state.ui?.treeMotion;
+    const tree = state.ui?.tree;
+    if (!before || !motion?.isConnected || !tree?.isConnected) return;
+    const { duration, easing } = nativeTreeMotionSpec();
+    if (duration <= 0 || prefersReducedMotion()) return;
+    const newHeight = tree.getBoundingClientRect().height;
+    const token = ++state.treeMotionToken;
+    motion.style.height = `${before.height}px`;
+    motion.style.overflow = "hidden";
+    motion.style.transition = "none";
+    void motion.offsetHeight;
+    motion.style.transition = `height ${duration}ms ${easing}`;
+
+    for (const [key, previous] of before.rows) {
+      if (liveKeys.has(key)) continue;
+      const ghost = previous.row.cloneNode(true);
+      const left = previous.rect.left - before.motionRect.left;
+      const top = previous.rect.top - before.motionRect.top;
+      ghost.dataset.spineMotionGhost = "true";
+      ghost.removeAttribute("data-spine-action");
+      ghost.style.position = "absolute";
+      ghost.style.left = `${left}px`;
+      ghost.style.top = `${top}px`;
+      ghost.style.width = `${previous.rect.width}px`;
+      ghost.style.height = `${previous.rect.height}px`;
+      ghost.style.marginLeft = "0";
+      ghost.style.pointerEvents = "none";
+      ghost.style.zIndex = "2";
+      ghost.style.transformOrigin = "top";
+      motion.append(ghost);
+      const animation = ghost.animate([
+        { opacity: 1, clipPath: "inset(0 0 0 0)", transform: "translateY(0)" },
+        { opacity: 0, clipPath: "inset(0 0 100% 0)", transform: "translateY(-2px)" },
+      ], { duration, easing, fill: "forwards" });
+      animation.finished.then(() => ghost.remove(), () => ghost.remove());
+    }
+
+    for (const [key, row] of state.rows) {
+      if (!row.isConnected || row.parentElement !== tree) continue;
+      const previous = before.rows.get(key);
+      if (!previous) {
+        row.animate([
+          { opacity: 0, transform: "translateY(-4px)" },
+          { opacity: 1, transform: "translateY(0)" },
+        ], { duration, easing });
+        continue;
+      }
+      const nextRect = row.getBoundingClientRect();
+      const deltaY = previous.rect.top - nextRect.top;
+      if (Math.abs(deltaY) < 0.5) continue;
+      row.animate([
+        { transform: `translateY(${deltaY}px)` },
+        { transform: "translateY(0)" },
+      ], { duration, easing });
+    }
+
+    requestAnimationFrame(() => {
+      if (token === state.treeMotionToken && motion.isConnected) {
+        motion.style.height = `${newHeight}px`;
+      }
+    });
+    state.treeMotionTimer = setTimeout(() => {
+      if (token !== state.treeMotionToken || !motion.isConnected) return;
+      state.treeMotionTimer = 0;
+      for (const ghost of motion.querySelectorAll("[data-spine-motion-ghost]")) {
+        ghost.remove();
+      }
+      motion.style.removeProperty("height");
+      motion.style.removeProperty("overflow");
+      motion.style.removeProperty("transition");
+    }, duration + 50);
+  }
+
+  function scheduleRender() {
+    if (!state.expanded || state.frame || !state.ui?.host.isConnected || state.destroyed) return;
+    state.frame = requestAnimationFrame(() => {
+      state.frame = 0;
+      render();
+    });
+  }
+
+  function renderActiveNow(animateTree = false) {
+    if (!state.expanded || !state.ui || state.destroyed) return;
+    if (state.frame) {
+      cancelAnimationFrame(state.frame);
+      state.frame = 0;
+    }
+    render(animateTree);
+  }
+
+  function render(animateTree = false) {
+    if (!animateTree) finishTreeMotion();
+    const snapshot = currentSnapshot();
+    if (!snapshot) {
+      if (state.detailRequested) closeWorkspaceDetail(true, true);
+      state.ui.tree.replaceChildren(emptyRow(
+        state.activeThreadId
+          ? t("tree.noActivity")
+          : t("tree.waiting"),
+      ));
+      state.ui.footer.textContent = "";
+      return;
+    }
+    const projected = projectSnapshot(snapshot);
+    const treeMotion = animateTree ? captureTreeMotion() : null;
+    const fragment = document.createDocumentFragment();
+    const liveKeys = new Set();
+    const threadId = normalizeThreadId(snapshot.threadId);
+    const selectedKey = threadId ? state.selectedRows.get(threadId) : null;
+    const selectedItem = selectedKey
+      ? resolveWorkspaceDetailItem(snapshot, selectedKey, projected)
+      : null;
+    for (const item of projected) {
+      liveKeys.add(item.key);
+      let row = state.rows.get(item.key);
+      if (!row) {
+        row = document.createElement(item.kind === "limit" ? "div" : "button");
+        if (row.tagName === "BUTTON") row.type = "button";
+        row.className = "row";
+        row.innerHTML =
+          '<span class="status-icon" aria-hidden="true"></span>' +
+          '<span class="label"></span>' +
+          '<span class="row-meta"></span>' +
+          '<span class="row-affordance" aria-hidden="true">' +
+          '<svg viewBox="0 0 20 20"><path d="m7.5 4.75 5.25 5.25-5.25 5.25"/></svg></span>';
+        state.rows.set(item.key, row);
+      }
+      const selectable = item.kind === "node" || item.kind === "spawn";
+      const selected = selectable && selectedKey === item.key;
+      row.className =
+        `row ${item.kind}${item.active ? " active" : ""}${item.current ? " current" : ""}${selected ? " selected" : ""}`;
+      row.style.setProperty("--depth", String(item.depth));
+      row.dataset.depth = String(item.depth);
+      row.dataset.last = String(Boolean(item.last));
+      if (item.kind === "context-history") {
+        row.dataset.spineAction = "toggle-context-history";
+        row.dataset.epochKey = item.epochKey;
+        delete row.dataset.bucketKey;
+        delete row.dataset.rowKey;
+        row.setAttribute("aria-expanded", String(Boolean(item.expanded)));
+        row.title = t("tree.showEarlier");
+      } else if (item.kind === "context-epoch") {
+        row.dataset.spineAction = "toggle-context-epoch";
+        row.dataset.epochKey = item.epochKey;
+        delete row.dataset.bucketKey;
+        delete row.dataset.rowKey;
+        row.setAttribute("aria-expanded", String(Boolean(item.expanded)));
+        row.title = t("tree.showCompaction", {
+          count: formatInteger(item.compactionNumber),
+        });
+      } else if (item.kind === "bucket") {
+        row.dataset.spineAction = "toggle-bucket";
+        row.dataset.bucketKey = item.bucketKey;
+        delete row.dataset.rowKey;
+        row.setAttribute("aria-expanded", String(Boolean(item.expanded)));
+        row.title = t("tree.showBranches");
+      } else if (selectable) {
+        row.dataset.spineAction = "toggle-detail";
+        row.dataset.rowKey = item.key;
+        delete row.dataset.bucketKey;
+        row.setAttribute("aria-expanded", String(selected));
+        row.title = t("tree.viewDetails");
+      } else {
+        delete row.dataset.spineAction;
+        delete row.dataset.epochKey;
+        delete row.dataset.current;
+        delete row.dataset.bucketKey;
+        delete row.dataset.rowKey;
+        row.removeAttribute("aria-expanded");
+        row.removeAttribute("title");
+      }
+      const status = row.children[0];
+      status.className = `status-icon ${item.tone}`;
+      if (row.dataset.icon !== item.icon) {
+        status.innerHTML = ICONS[item.icon] ?? ICONS.idle;
+        row.dataset.icon = item.icon;
+      }
+      row.children[1].textContent = item.label;
+      row.children[2].textContent = item.meta ?? "";
+      fragment.append(row);
+    }
+    for (const [key] of state.rows) {
+      if (!liveKeys.has(key)) state.rows.delete(key);
+    }
+    if (selectedKey && !selectedItem && threadId) {
+      state.selectedRows.delete(threadId);
+      if (state.detailRequested) closeWorkspaceDetail(false, true);
+    } else if (selectedItem && state.detailRequested) {
+      scheduleWorkspaceDetailRefresh();
+    } else if (state.detailRequested) {
+      closeWorkspaceDetail(true, true);
+    }
+    state.ui.tree.replaceChildren(
+      projected.length
+        ? fragment
+        : emptyRow(t("tree.empty")),
+    );
+    if (treeMotion) animateTreeProjection(treeMotion, liveKeys);
+    state.ui.footer.textContent = tp("tree.nodes", snapshot.nodes.length);
+  }
+
+  function emptyRow(text) {
+    const element = document.createElement("div");
+    element.className = "empty";
+    element.textContent = text;
+    return element;
+  }

@@ -4,6 +4,26 @@
 
 ## 尚未发布
 
+## v0.3.2.0 - 2026-08-24
+
+以 SpineCodex 0.3.2 为正式验证基线的兼容发布，同时保留 SpineCodex 0.2.2
+最低兼容线。
+
+- 将 SpineCodex 产品版本与 Codex 兼容身份分开记录；0.3.2 对应兼容身份
+  0.147.0。
+- 新增稳定 JSON 诊断，覆盖 Apps 协议能力、已安装 Desktop 身份、Renderer
+  完整性和本地/远程兼容要求。
+- 只读扫描已安装 macOS `app.asar`；主进程、版本检查和本地 CLI selector
+  契约不能唯一匹配时 fail closed。
+- 支持 SpineCodex 0.3.2 原生 `app/installed` 与 `app/read`，同时保留 0.2.2
+  分页 `app/list` 适配器。
+- 恢复 Settings 中 stable `spine_spawn`，保留 beta Memory Projection，并隔离
+  本地与远程主机状态。
+- 将生成的 0.3.2 Tree/Spawn schema 固化为契约夹具，并把 Renderer 拆成有序
+  源模块，同时保持单一注入产物字节一致。
+- 在独立端到端门禁完成前继续禁用图片生成，且不把 OpenAI Codex 0.149.1
+  作为 SpineCodex 基线。
+
 ## v0.2.2.5 - 2026-08-14
 
 仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。

@@ -69,5 +69,70 @@ test("version command does not require installed dependencies", () => {
     env: { ...process.env, PATH: "/usr/bin:/bin" },
   });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), "spine-app 0.2.2.5");
+  assert.equal(result.stdout.trim(), "spine-app 0.3.2.0");
+});
+
+test("JSON diagnosis has stable version, protocol, Desktop, and remote fields", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine-app-json-"));
+  const binary = join(directory, "spine-codex");
+  try {
+    await writeFile(binary, `#!/usr/bin/env node
+import { createInterface } from "node:readline";
+if (process.argv.includes("--version")) {
+  console.log("codex-cli 0.147.0");
+  process.exit(0);
+}
+const lines = createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.id === 1) console.log(JSON.stringify({ id: 1, result: {} }));
+  if (message.id === 2 || message.id === 3) {
+    console.log(JSON.stringify({ id: message.id, result: {} }));
+  }
+});
+`, "utf8");
+    await chmod(binary, 0o755);
+    const result = spawnSync(
+      process.execPath,
+      [
+        LAUNCHER,
+        "--diagnose",
+        "--json",
+        "--spine-codex",
+        binary,
+        "--app",
+        MISSING_APP,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr, "");
+    const diagnosis = JSON.parse(result.stdout);
+    assert.equal(diagnosis.schemaVersion, 1);
+    assert.equal(diagnosis.app.version, "0.3.2.0");
+    assert.deepEqual(
+      {
+        minimum: diagnosis.spineCodex.minimumVersion,
+        recommended: diagnosis.spineCodex.recommendedVersion,
+        compatibility: diagnosis.spineCodex.validatedCompatibilityVersion,
+        mode: diagnosis.spineCodex.mode,
+        product: diagnosis.spineCodex.productVersion,
+        protocol: diagnosis.spineCodex.appsProtocol.mode,
+      },
+      {
+        minimum: "0.2.2",
+        recommended: "0.3.2",
+        compatibility: "0.147.0",
+        mode: "compatibility-only",
+        product: null,
+        protocol: "native",
+      },
+    );
+    assert.equal(diagnosis.codexDesktop.version, null);
+    assert.equal(diagnosis.codexDesktop.validatedBuild, null);
+    assert.equal(diagnosis.remote.minimumSpineCodexVersion, "0.2.2");
+    assert.match(diagnosis.renderer.sha256, /^[0-9a-f]{64}$/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

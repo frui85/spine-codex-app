@@ -2,7 +2,7 @@
 
 > **简体中文** · [English](FEATURES.md)
 
-本文记录 SpineCodex App v0.2.2.5 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v0.3.2.0 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
 本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
 
@@ -12,8 +12,14 @@
 
 ```sh
 node spine-app.mjs --diagnose
+node spine-app.mjs --diagnose --json
 node spine-app.mjs /path/to/workspace
 ```
+
+JSON 诊断使用带版本的固定结构，分别输出 App 版本、SpineCodex 产品版本、
+Codex 兼容身份、Apps 协议模式、Desktop 版本与 bundle 契约、Renderer
+SHA-256 和远端最低要求。无法解析 npm 产品包时，产品版本为 `null`，但仍会
+结合兼容身份与真实协议探测判断该二进制是否可用。
 
 启动前必须完整退出 Codex Desktop。包装层使用随机的、仅限回环地址的 CDP 端口，验证 Renderer WebSocket，为初始目标注册 Renderer，完成区域注入后退出。经过验证的 Electron main hook 会独立保留窄范围的 `web-contents-created` 和 `did-finish-load` 监听器。它先对 `spine-view.js` 做 SHA-256 校验，然后在每次主区域加载完成时重新读取同一绝对资源路径。当前源码只会在精确的 `app://-/index.html` 区域执行，因此 Renderer 崩溃、重新加载或 BrowserWindow 替换都不会恢复过期的内存内 revision，也不需要启动器守护。完整 App 进程重启仍必须再次通过包装层启动。
 
@@ -33,7 +39,7 @@ AppX 可执行文件可能只是打包启动器，而不是携带 fuse wire 的 
 ssh <host> 'command -v spine-codex && spine-codex --version'
 ```
 
-Codex Desktop 当前把 CLI `0.141.0` 视为上游最低版本。一个轻量 Electron main preload 会在保留 App 原始接受规则的同时，把兼容性检查扩展到 SpineCodex `0.2.2` 或更高版本。它根据稳定的“不支持版本”错误前缀和比较器结构识别 `src-*` 版本 bundle，而不是依赖 `wc`、`mc` 等生成的导出名。
+SpineCodex 0.3.2 通过 `@spinejit/spine-codex/package.json` 报告产品版本，并通过 `--version` 报告 `codex-cli 0.147.0`。启动器把两者分别记录为产品身份与兼容身份。一个轻量 Electron main preload 会在保留 App 原始接受规则的同时，把兼容性检查扩展到 SpineCodex `0.2.2` 或更高版本。它根据稳定的“不支持版本”错误前缀和比较器结构识别 `src-*` 版本 bundle，而不是依赖 `wc`、`mc` 等生成的导出名。
 
 同一个 preload 根据稳定的二进制缺失错误文本和 selector 结构识别本地 CLI selector。它只修改共享 `src-*` bundle 中的本地 selector；遇到未知结构时，会在 Desktop 启动被报告为 ready 前 fail closed。
 
@@ -45,7 +51,11 @@ preload 还根据固定的 `desktop-ssh-websocket-v0.sock` marker 识别 SSH boo
 
 preload 只在 Electron 浏览器主线程中运行。main chunk 和版本 chunk 可以按任意顺序加载，因此两个目标都按内容独立识别；worker、Renderer 和 utility 进程不会被修改。两项补丁验证完成后，loader hook 会被移除，一次性状态握手允许启动器继续。Renderer 恢复事件监听器会继续存在，但只在主 `app://-/index.html` 区域完成加载时工作，不执行轮询。未知结构、Renderer 恢复注册缺失或 Renderer hash 不匹配都会以明确启动错误 fail closed。不会修改任何 `app.asar` 文件或 App 签名。
 
-兼容性门禁会如实解析 SpineCodex 的 `--version` 输出。原生连接卡片仍可能显示类似 `0.144.6` 的上游 core/app-server 版本，因为该值来自已连接 app-server 的 initialize 握手，而不是 CLI 探测。这不代表远程可执行文件是官方 Codex；实际 SSH 命令和进程身份才是判断后端的权威依据。
+在 macOS 上，诊断还会只读访问已安装 `app.asar` 的索引，不提取或修改文件。SSH 主进程 bundle、版本检查和本地 CLI selector 都必须各自唯一匹配，且后两者必须位于运行时 hook 使用的同一 `src-*` bundle。结果会列出 Desktop 版本和候选文件名。Windows Store 包激活可能让启动器无法直接看到实际 Electron 归档，因此 Windows 继续使用等价的运行时 Inspector 握手。
+
+兼容性门禁会分别解析 SpineCodex 产品包与 `--version` 输出。原生连接卡片仍可能显示类似 `0.147.0` 的上游 core/app-server 版本，因为该值来自已连接 app-server 的 initialize 握手，而不是 CLI 产品版本探测。这不代表远程可执行文件是官方 Codex；实际 SSH 命令和进程身份才是判断后端的权威依据。
+
+本地 shim 会依次探测 `app/installed` 和 `app/read`。SpineCodex 0.3.2 走原生路径；明确拒绝任一方法的旧后端会使用保留的分页 `app/list` 兼容适配器；其他错误会报告不可用，不会被静默转换。诊断分别将三种模式标记为 `native`、`legacy-fallback` 和 `unavailable`。
 
 如果远程主机没有 `spine-codex`，App 原生的 CLI 缺失页面仍会调用官方 Codex 安装器。不要为本包装层使用该安装器；请在远程主机安装 SpineCodex 后重新连接。由于 SSH 命令选择和最低版本检查位于 Electron 主进程中，该功能要求完整退出 App，并通过 `spine-app.mjs` 重新启动；仅对 Renderer 热注入无法启用。
 
@@ -91,7 +101,9 @@ Spawn transaction 结束时，call ID、ordinal、child thread ID、agent path �
 
 打开 **Settings → Agent**，查看 **Model features** 正下方。包装层会添加一个原生风格的 **Spine features** 区域，目前包含 **Spine JIT**、**Spine Trim**、**Spine Spawn** 和 **Spine Tree memory projection** 开关。它不会解锁或修改 Codex 私有 Experimental features 门禁，不会向 summary card 添加控件，也不会拦截 slash command。
 
-该区域跟随 Codex Settings 顶部选择的主机。本地主机和远程主机拥有独立的 `config.toml`：修改本地开关不会改变已连接远程主机的同名开关。Renderer 通过 `experimentalFeature/list` 读取各主机自己的功能目录，选择稳定的 `spine_jit`、`spine_trim` 控件，以及 SpineCodex 拥有的 beta 功能（`spine_*` 或 `spinetree_*`），并通过 Codex 正常的 `config/batchWrite` 流程写入所选 `features.<name>` key。因此未来 SpineCodex beta 功能无需发布 Renderer 新版本也能出现。该区域只显示在 Agent 设置页，不执行轮询，Settings 关闭时也不发出请求。
+该区域跟随 Codex Settings 顶部选择的主机。本地主机和远程主机拥有独立的 `config.toml`：修改本地开关不会改变已连接远程主机的同名开关。Renderer 通过 `experimentalFeature/list` 读取各主机自己的功能目录，选择稳定的 `spine_jit`、`spine_trim`、`spine_spawn` 控件，以及 SpineCodex 拥有的 beta 功能（`spine_*` 或 `spinetree_*`），并通过 Codex 正常的 `config/batchWrite` 流程写入所选 `features.<name>` key。因此未来 SpineCodex beta 功能无需发布 Renderer 新版本也能出现。该区域只显示在 Agent 设置页，不执行轮询，Settings 关闭时也不发出请求。
+
+区域标题会显示所选主机、Spawn 默认状态和 Memory Projection 状态。本地主机还会显示启动器验证过的 SpineCodex 产品版本与 Codex 兼容版本。Desktop 在当前 bootstrap 中只提供远程 host ID，因此远端版本显示“未报告”，不会复制本地诊断结论。切换主机时会先清除旧功能快照，再请求所选主机目录。
 
 SpineCodex 会在新 thread 启动时重新加载最新配置，因此无需完整重启 App。开关有意不改变正在运行的会话，只提示变更应用于新会话。Spine JIT 启用任务树生命周期和上下文投影。Spine Trim 允许模型保守地截取或清除紧邻的大型 tool result 投影。Spine Spawn 在并行独立工作有价值时提供 `spine.spawn`，不会强制每个任务创建分支。Memory projection 会把关闭节点记忆写入该会话工作区的 `.codex/spinetree/` Markdown 文件。
 
@@ -111,8 +123,11 @@ window.__spineCodexViewV1.clearCache()
 
 Spine Tree 标题和工作区 tab 使用一个紧凑的手工标记：三个上下文节点汇入一个记忆胶囊。图标只使用 `currentColor`，无需独立图片资源即可跟随 Codex 原生明暗主题。
 
+仓库中的 `spine-view.js` 继续作为唯一注入产物。源码按职责维护在 `renderer/` 下的有序模块中；`npm run build:renderer` 以原子方式拼接，`npm run check` 会拒绝模块与发布产物之间的任何字节漂移。
+
 可用参数：
 
 - `--spine-codex PATH`：选择现有 SpineCodex 二进制。
 - `--app PATH`：选择 Codex/ChatGPT App bundle。
 - `--diagnose`：只验证路径和版本，不启动应用。
+- `--diagnose --json`：输出带版本的机器可读兼容报告。
