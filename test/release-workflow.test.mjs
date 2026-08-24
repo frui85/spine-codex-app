@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { renderReleaseNotes } from "../scripts/prepare-release-notes.mjs";
 
 const root = new URL("../", import.meta.url);
 const releaseWorkflow = await readFile(
@@ -41,12 +42,37 @@ test("active release workflow is tag-driven and publishes macOS only", () => {
   assert.match(releaseWorkflow, /tags: \["v\*"\]/);
   assert.match(releaseWorkflow, /validate-release-tag\.mjs/);
   assert.match(releaseWorkflow, /build-macos-release\.mjs --all --version/);
-  assert.match(releaseWorkflow, /docs\/RELEASE_NOTES_v\$\{VERSION\}\.md/);
+  assert.match(releaseWorkflow, /notes_source="docs\/RELEASE_NOTES_v\$\{VERSION\}\.md"/);
+  assert.match(releaseWorkflow, /prepare-release-notes\.mjs/);
   assert.match(releaseWorkflow, /gh release create .*--draft/);
   assert.match(releaseWorkflow, /gh release edit[\s\S]*--draft=false --latest/);
   assert.doesNotMatch(releaseWorkflow, /build-windows-release|windows-x64/);
   assert.match(releaseNotes, /^# SpineCodex App v0\.3\.2\.0/m);
   assert.match(releaseNotes, /SpineCodex recommended baseline \| 0\.3\.2/);
+});
+
+test("release notes use a tag-pinned absolute Chinese link", () => {
+  const rendered = renderReleaseNotes(releaseNotes, {
+    repository: "frui85/spine-codex-app",
+    ref: "v0.3.2.0",
+    version: "0.3.2.0",
+  });
+  assert.match(
+    rendered,
+    /\[中文发布说明\]\(https:\/\/github\.com\/frui85\/spine-codex-app\/blob\/v0\.3\.2\.0\/docs\/RELEASE_NOTES_v0\.3\.2\.0_ZH\.md\)/,
+  );
+  assert.doesNotMatch(rendered, /\[中文发布说明\]\(RELEASE_NOTES_/);
+});
+
+test("release-note rendering fails closed when the expected link drifts", () => {
+  assert.throws(
+    () => renderReleaseNotes("# Notes\n", {
+      repository: "frui85/spine-codex-app",
+      ref: "v0.3.2.0",
+      version: "0.3.2.0",
+    }),
+    /expected exactly one Chinese release-notes link/,
+  );
 });
 
 test("Windows workflow is complete but ignored by GitHub Actions", () => {
