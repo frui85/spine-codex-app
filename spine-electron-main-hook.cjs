@@ -3,7 +3,9 @@
 const Module = require("node:module");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const readline = require("node:readline");
 const { isMainThread } = require("node:worker_threads");
 
 const DEFAULT_MIN_SPINE_VERSION = "0.2.2";
@@ -24,6 +26,15 @@ const RENDERER_PATH_ENV = "SPINE_CODEX_RENDERER_PATH";
 const RENDERER_SHA256_ENV = "SPINE_CODEX_RENDERER_SHA256";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const ELECTRON_MAIN_SPECIFIERS = ["electron/main", "electron"];
+const ELECTRON_MODULE_IDS = new Set(ELECTRON_MAIN_SPECIFIERS);
+const APP_SERVER_VIEW_CHANNEL = "codex_desktop:message-from-view";
+const REPLAY_RECOVERY_MESSAGE = "spine-thread-replay-recover";
+const REPLAY_ALIAS_SYNC_MESSAGE = "spine-thread-replay-aliases-sync";
+const THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DURABILITY_REPLAY_MISMATCH_PATTERN =
+  /Spine durability is faulted:\s*Spine replay failed:\s*sampling commit does not match its sampling-started record/;
+const MAX_RECOVERY_HISTORY_ITEMS = 5_000;
+const MAX_RECOVERY_HISTORY_BYTES = 64 * 1024 * 1024;
 const VERSION_CHECK_PATTERN =
   /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\{return \2===([A-Za-z_$][\w$]*)\|\|([A-Za-z_$][\w$]*)\(\2,([A-Za-z_$][\w$]*)\)>=0\}/g;
 const STABLE_VERSION_PATTERN =
@@ -467,6 +478,333 @@ function reloadRendererPayload(payload) {
   });
 }
 
+function isDurabilityReplayMismatch(value) {
+  return DURABILITY_REPLAY_MISMATCH_PATTERN.test(String(value ?? ""));
+}
+
+function isThreadId(value) {
+  return THREAD_ID_PATTERN.test(String(value ?? ""));
+}
+
+async function findThreadRolloutPath(threadId, options = {}) {
+  if (!isThreadId(threadId)) {
+    throw new Error("Spine replay recovery requires a valid thread ID");
+  }
+  const codexHome = path.resolve(
+    options.codexHome ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
+  );
+  const roots = [
+    path.join(codexHome, "sessions"),
+    path.join(codexHome, "archived_sessions"),
+  ];
+  const suffix = `-${threadId}.jsonl`;
+  const matches = [];
+  const pending = [...roots];
+  while (pending.length) {
+    const directory = pending.pop();
+    let entries;
+    try {
+      entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(candidate);
+      else if (entry.isFile() && entry.name.endsWith(suffix)) matches.push(candidate);
+    }
+  }
+  if (matches.length === 0) {
+    throw new Error(`Spine replay recovery could not locate thread ${threadId}`);
+  }
+  const ranked = await Promise.all(matches.map(async (candidate) => ({
+    candidate,
+    modified: (await fs.promises.stat(candidate)).mtimeMs,
+  })));
+  ranked.sort((left, right) => right.modified - left.modified);
+  return ranked[0].candidate;
+}
+
+function inheritedSpineThread(record) {
+  return record?.attempt_id?.thread ?? record?.pre_boundary?.thread ?? null;
+}
+
+async function readInheritedReplayHistory(rolloutPath, threadId) {
+  const stream = fs.createReadStream(rolloutPath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lineNumber = 0;
+  let firstSessionMeta = null;
+  let firstSpineRecord = null;
+  let compactedBeforeFirstSpine = false;
+  let history = [];
+  let hasReplacementHistory = false;
+  let unsupportedTailReason = null;
+
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      let item;
+      try {
+        item = JSON.parse(line);
+      } catch {
+        throw new Error(`Spine replay recovery found malformed JSONL at line ${lineNumber}`);
+      }
+      if (item.type === "session_meta" && firstSessionMeta == null) {
+        firstSessionMeta = item.payload;
+        continue;
+      }
+      if (item.type === "spine_sampling_started" && firstSpineRecord == null) {
+        firstSpineRecord = item.payload?.payload?.record ?? null;
+        continue;
+      }
+      if (item.type === "compacted") {
+        if (firstSpineRecord == null) compactedBeforeFirstSpine = true;
+        if (!Array.isArray(item.payload?.replacement_history)) {
+          throw new Error(
+            "Spine replay recovery cannot safely materialize a legacy compact without replacement history",
+          );
+        }
+        history = item.payload.replacement_history;
+        hasReplacementHistory = true;
+        unsupportedTailReason = null;
+        continue;
+      }
+      if (item.type === "response_item") {
+        history.push(item.payload);
+        continue;
+      }
+      if (item.type === "inter_agent_communication") {
+        unsupportedTailReason = "inter-agent communication after the latest compact";
+        continue;
+      }
+      if (
+        item.type === "event_msg" &&
+        item.payload?.type === "thread_rolled_back"
+      ) {
+        unsupportedTailReason = "a rollback after the latest compact";
+      }
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+
+  if (firstSessionMeta?.id !== threadId) {
+    throw new Error("Spine replay recovery rollout identity does not match the requested thread");
+  }
+  const parentThreadId = firstSessionMeta.parent_thread_id;
+  const isSubagent =
+    firstSessionMeta.thread_source === "subagent" ||
+    firstSessionMeta.source?.subagent != null;
+  if (!isSubagent || !isThreadId(parentThreadId)) {
+    throw new Error("Spine replay recovery is limited to inherited subagent lineages");
+  }
+  const recordThread = inheritedSpineThread(firstSpineRecord);
+  if (
+    !compactedBeforeFirstSpine ||
+    firstSpineRecord?.epoch !== 0 ||
+    firstSpineRecord?.previous_commit_id != null ||
+    recordThread !== parentThreadId ||
+    recordThread === threadId
+  ) {
+    throw new Error("Spine replay recovery did not find a mixed native-to-inherited lineage");
+  }
+  if (!hasReplacementHistory || history.length === 0) {
+    throw new Error("Spine replay recovery found no effective native history");
+  }
+  if (unsupportedTailReason != null) {
+    throw new Error(`Spine replay recovery cannot safely handle ${unsupportedTailReason}`);
+  }
+  if (history.length > MAX_RECOVERY_HISTORY_ITEMS) {
+    throw new Error("Spine replay recovery history exceeds the item safety limit");
+  }
+  const historyBytes = Buffer.byteLength(JSON.stringify(history));
+  if (historyBytes > MAX_RECOVERY_HISTORY_BYTES) {
+    throw new Error("Spine replay recovery history exceeds the byte safety limit");
+  }
+  return Object.freeze({
+    history,
+    parentThreadId,
+    itemCount: history.length,
+    historyBytes,
+  });
+}
+
+async function recoverInheritedReplayHistory(threadId, options = {}) {
+  const rolloutPath = await findThreadRolloutPath(threadId, options);
+  const recovered = await readInheritedReplayHistory(rolloutPath, threadId);
+  const parentRolloutPath = await findThreadRolloutPath(
+    recovered.parentThreadId,
+    options,
+  );
+  return Object.freeze({ ...recovered, rolloutPath, parentRolloutPath });
+}
+
+function installAppServerReplayRecovery(options = {}) {
+  const electron = options.electron ?? loadElectronMainApi(options.requireFn);
+  const ipcMain = electron?.ipcMain;
+  if (typeof ipcMain?.handle !== "function") {
+    throw new Error("Electron App Server recovery IPC APIs are unavailable");
+  }
+  const channel = options.channel ?? APP_SERVER_VIEW_CHANNEL;
+  const recoverHistory = options.recoverHistory ?? recoverInheritedReplayHistory;
+  const aliases = new Map();
+  const originalHandle = ipcMain.handle;
+  let disposed = false;
+  let ready = false;
+  let registeredHandler = null;
+  let experimentalApiEnabled = false;
+
+  const applyAliases = (entries) => {
+    if (!Array.isArray(entries)) return;
+    aliases.clear();
+    for (const entry of entries) {
+      const [source, target] = Array.isArray(entry) ? entry : [];
+      if (isThreadId(source) && isThreadId(target) && source !== target) {
+        aliases.set(source, target);
+      }
+    }
+  };
+
+  const wrapHandler = (handler) => async (event, message) => {
+    if (message?.type === REPLAY_ALIAS_SYNC_MESSAGE) {
+      applyAliases(message.aliases);
+      return;
+    }
+    if (message?.type === REPLAY_RECOVERY_MESSAGE) {
+      const request = message.request;
+      const threadId = request?.params?.threadId;
+      if (
+        message.hostId !== "local" ||
+        request?.method !== "thread/resume" ||
+        request.params?.history != null ||
+        !experimentalApiEnabled ||
+        !isThreadId(threadId) ||
+        !isDurabilityReplayMismatch(message.errorMessage)
+      ) {
+        throw new Error("Spine replay recovery request is outside the guarded recovery scope");
+      }
+      const recovered = await recoverHistory(threadId, options);
+      const retry = {
+        ...message,
+        type: "mcp-request",
+        request: {
+          ...request,
+          params: {
+            ...request.params,
+            history: recovered.history,
+            path: null,
+          },
+        },
+      };
+      delete retry.errorMessage;
+      console.warn(
+        `[SpineCodex] retrying inherited Spine lineage ${threadId} with ` +
+          `${recovered.itemCount} effective native history items`,
+      );
+      return handler(event, retry);
+    }
+    if (message?.type === "mcp-request") {
+      if (message.request?.method === "initialize") {
+        experimentalApiEnabled =
+          message.request.params?.capabilities?.experimentalApi === true;
+      }
+      const threadId = message.request?.params?.threadId;
+      const target = aliases.get(threadId);
+      if (target != null) {
+        message = {
+          ...message,
+          request: {
+            ...message.request,
+            params: { ...message.request.params, threadId: target },
+          },
+        };
+      }
+    }
+    return handler(event, message);
+  };
+
+  function spineIpcHandle(requestChannel, handler) {
+    if (requestChannel !== channel) {
+      return Reflect.apply(originalHandle, this, [requestChannel, handler]);
+    }
+    const result = Reflect.apply(originalHandle, this, [requestChannel, wrapHandler(handler)]);
+    registeredHandler = handler;
+    ready = true;
+    if (ipcMain.handle === spineIpcHandle) ipcMain.handle = originalHandle;
+    options.onReady?.();
+    return result;
+  }
+
+  ipcMain.handle = spineIpcHandle;
+  return Object.freeze({
+    get ready() { return ready; },
+    aliases,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      if (ipcMain.handle === spineIpcHandle) ipcMain.handle = originalHandle;
+      if (
+        ready &&
+        registeredHandler != null &&
+        typeof ipcMain.removeHandler === "function"
+      ) {
+        ipcMain.removeHandler(channel);
+        Reflect.apply(originalHandle, ipcMain, [channel, registeredHandler]);
+      }
+    },
+  });
+}
+
+function isElectronMainApi(value) {
+  return Boolean(
+    value?.app?.on &&
+    value?.app?.whenReady &&
+    value?.webContents?.getAllWebContents &&
+    value?.ipcMain?.handle,
+  );
+}
+
+function captureElectronMainApi(options = {}) {
+  const moduleApi = options.moduleApi ?? Module;
+  const loadInitial = options.loadInitial ?? (() => loadElectronMainApi());
+  const onReady = options.onReady;
+  if (typeof onReady !== "function") {
+    throw new TypeError("Electron main API capture requires an onReady callback");
+  }
+
+  try {
+    const immediate = loadInitial();
+    if (!isElectronMainApi(immediate)) {
+      throw new Error("Electron main-process APIs are unavailable");
+    }
+    onReady(immediate);
+    return Object.freeze({ deferred: false, dispose() {} });
+  } catch (error) {
+    if (error?.code !== "SPINE_ELECTRON_API_UNAVAILABLE") throw error;
+  }
+
+  const originalLoad = moduleApi._load;
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    if (moduleApi._load === spineElectronLoad) moduleApi._load = originalLoad;
+  };
+  function spineElectronLoad(request, parent, isMain) {
+    const value = Reflect.apply(originalLoad, this, [request, parent, isMain]);
+    if (ELECTRON_MODULE_IDS.has(request) && isElectronMainApi(value)) {
+      dispose();
+      onReady(value);
+    }
+    return value;
+  }
+  moduleApi._load = spineElectronLoad;
+  return Object.freeze({ deferred: true, dispose });
+}
+
 function installRendererRecovery(options = {}) {
   let payload = options.payload ?? loadRendererPayload(options);
   if (payload == null) return null;
@@ -561,31 +899,15 @@ function installMainProcessHook(options = {}) {
     options.statusPath ?? process.env.SPINE_CODEX_MAIN_HOOK_STATUS;
   const deadlineMs = options.deadlineMs ?? DEFAULT_HOOK_DEADLINE_MS;
 
-  let rendererRecovery = null;
-  let rendererRecoveryDeferred = false;
-  try {
-    rendererRecovery = installRendererRecovery(options.rendererRecoveryOptions);
-  } catch (error) {
-    if (error?.code === "SPINE_ELECTRON_API_UNAVAILABLE") {
-      // Current Electron builds can execute NODE_OPTIONS preloads before their
-      // bootstrap registers electron/main in Module._resolveFilename. The
-      // app bundle is still patched synchronously below; install recovery on
-      // the first event-loop turn, after Electron's own bootstrap completes.
-      rendererRecoveryDeferred = true;
-    } else {
-      writeHookStatus(statusPath, "incompatible", {
-        reason: String(error?.message ?? error),
-        rendererRecovery: false,
-      });
-      throw error;
-    }
-  }
-
   const originalExtension = Module._extensions[".js"];
   let patchedMainFilename = null;
   let patchedVersionFilename = null;
   let mainPatched = false;
   let versionPatched = false;
+  let rendererRecovery = null;
+  let appServerReplayRecovery = null;
+  let electronCapture = null;
+  let rendererRecoveryDeferred = false;
   let deadline = null;
   let failed = false;
 
@@ -598,29 +920,88 @@ function installMainProcessHook(options = {}) {
     if (failed) return;
     failed = true;
     restoreExtension();
+    electronCapture?.dispose();
+    appServerReplayRecovery?.dispose();
     if (deadline != null) clearTimeout(deadline);
     writeHookStatus(statusPath, "incompatible", {
       reason: String(reason?.message ?? reason),
       mainPatched,
       versionPatched,
       rendererRecovery: rendererRecovery != null,
+      appServerReplayRecovery: appServerReplayRecovery?.ready === true,
     });
   };
   const completeIfReady = () => {
-    if (failed || !mainPatched || !versionPatched || rendererRecovery == null) {
+    if (
+      failed ||
+      !mainPatched ||
+      !versionPatched ||
+      rendererRecovery == null ||
+      appServerReplayRecovery?.ready !== true
+    ) {
       return false;
     }
     restoreExtension();
+    electronCapture?.dispose();
     if (deadline != null) clearTimeout(deadline);
     writeHookStatus(statusPath, "ready", {
       mainFile: path.basename(patchedMainFilename),
       versionFile: path.basename(patchedVersionFilename),
       minimum,
       rendererRecovery: rendererRecovery != null,
+      appServerReplayRecovery: true,
       rendererSha256: rendererRecovery?.payload.sha256 ?? null,
     });
     return true;
   };
+  const activateElectronIntegrations = (electron) => {
+    if (rendererRecovery != null || appServerReplayRecovery != null) {
+      return { rendererRecovery, appServerReplayRecovery };
+    }
+    try {
+      rendererRecovery = installRendererRecovery({
+        ...options.rendererRecoveryOptions,
+        electron,
+      });
+      appServerReplayRecovery = installAppServerReplayRecovery({
+        ...options.appServerReplayRecoveryOptions,
+        electron,
+        onReady: completeIfReady,
+      });
+    } catch (error) {
+      incompatible(error);
+      throw error;
+    }
+    if (!completeIfReady()) {
+      writeHookStatus(statusPath, "electron-integrations-installed", {
+        mainPatched,
+        versionPatched,
+        rendererRecovery: true,
+        appServerReplayRecovery: appServerReplayRecovery?.ready === true,
+      });
+    }
+    return { rendererRecovery, appServerReplayRecovery };
+  };
+
+  try {
+    const explicitElectron = options.rendererRecoveryOptions?.electron;
+    if (explicitElectron != null) {
+      activateElectronIntegrations(explicitElectron);
+    } else {
+      const loadInitial = () => loadElectronMainApi(
+        options.rendererRecoveryOptions?.requireFn,
+      );
+      electronCapture = captureElectronMainApi({
+        ...options.electronCaptureOptions,
+        loadInitial,
+        onReady: activateElectronIntegrations,
+      });
+      rendererRecoveryDeferred = electronCapture.deferred;
+    }
+  } catch (error) {
+    incompatible(error);
+    throw error;
+  }
 
   function spineCodexMainExtension(
     module,
@@ -695,29 +1076,25 @@ function installMainProcessHook(options = {}) {
     setImmediate(() => {
       if (failed || rendererRecovery != null) return;
       try {
-        rendererRecovery = installRendererRecovery(
-          options.rendererRecoveryOptions,
+        const electron = loadElectronMainApi(
+          options.rendererRecoveryOptions?.requireFn,
         );
-        if (rendererRecovery == null) {
-          throw new Error("SpineCodex renderer recovery payload is unavailable");
-        }
-        if (!completeIfReady()) {
-          writeHookStatus(statusPath, "renderer-recovery-installed", {
-            minimum,
-            mainPatched,
-            versionPatched,
-            rendererRecovery: true,
-          });
-        }
+        electronCapture?.dispose();
+        activateElectronIntegrations(electron);
       } catch (error) {
-        incompatible(error);
+        if (error?.code !== "SPINE_ELECTRON_API_UNAVAILABLE") incompatible(error);
       }
     });
   }
   deadline = setTimeout(() => {
-    if (!mainPatched || !versionPatched || rendererRecovery == null) {
+    if (
+      !mainPatched ||
+      !versionPatched ||
+      rendererRecovery == null ||
+      appServerReplayRecovery?.ready !== true
+    ) {
       incompatible(
-        "SpineCodex hook did not observe compatible Codex bundles and Electron APIs before its deadline",
+        "SpineCodex hook did not observe compatible Codex bundles, Electron APIs, and replay bridge before its deadline",
       );
     }
   }, deadlineMs);
@@ -743,6 +1120,13 @@ module.exports = {
   loadRendererPayload,
   reloadRendererPayload,
   loadElectronMainApi,
+  isDurabilityReplayMismatch,
+  findThreadRolloutPath,
+  readInheritedReplayHistory,
+  recoverInheritedReplayHistory,
+  installAppServerReplayRecovery,
+  isElectronMainApi,
+  captureElectronMainApi,
   installRendererRecovery,
   installMainProcessHook,
 };

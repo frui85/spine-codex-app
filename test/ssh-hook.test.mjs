@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -372,6 +372,138 @@ assert.equal(
 assert.equal(hook.isCodexMainSurfaceUrl("https://example.com/index.html"), false);
 assert.equal(hook.isCodexMainSurfaceUrl("app://-/settings.html"), false);
 
+function createFakeIpcMain() {
+  const handlers = new Map();
+  return {
+    handlers,
+    handle(channel, handler) { handlers.set(channel, handler); },
+    removeHandler(channel) { handlers.delete(channel); },
+  };
+}
+
+const durabilityError =
+  "Fatal error: Spine durability is faulted: Spine replay failed: " +
+  "sampling commit does not match its sampling-started record";
+assert.equal(hook.isDurabilityReplayMismatch(durabilityError), true);
+assert.equal(hook.isDurabilityReplayMismatch("different replay failure"), false);
+
+const childThreadId = "00000000-0000-0000-0000-000000000041";
+const parentThreadId = "00000000-0000-0000-0000-000000000042";
+const recoveredThreadId = "00000000-0000-0000-0000-000000000043";
+const replayFixture = await mkdtemp(join(tmpdir(), "spine-replay-history-test-"));
+try {
+  const archived = join(replayFixture, "archived_sessions");
+  await mkdir(archived, { recursive: true });
+  const childPath = join(archived, `rollout-child-${childThreadId}.jsonl`);
+  const parentPath = join(archived, `rollout-parent-${parentThreadId}.jsonl`);
+  const historyA = { type: "message", role: "user", content: [{ type: "input_text", text: "seed" }] };
+  const historyB = { type: "message", role: "assistant", content: [{ type: "output_text", text: "tail" }] };
+  const records = [
+    {
+      type: "session_meta",
+      payload: {
+        id: childThreadId,
+        parent_thread_id: parentThreadId,
+        thread_source: "subagent",
+      },
+    },
+    { type: "response_item", payload: { type: "message", role: "user", content: [] } },
+    { type: "compacted", payload: { replacement_history: [historyA] } },
+    {
+      type: "spine_sampling_started",
+      payload: {
+        payload: {
+          record: {
+            epoch: 0,
+            previous_commit_id: null,
+            attempt_id: { thread: parentThreadId },
+          },
+        },
+      },
+    },
+    { type: "response_item", payload: historyB },
+  ];
+  await writeFile(childPath, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  await writeFile(parentPath, JSON.stringify({
+    type: "session_meta",
+    payload: { id: parentThreadId },
+  }) + "\n");
+
+  const materialized = await hook.readInheritedReplayHistory(childPath, childThreadId);
+  assert.deepEqual(materialized.history, [historyA, historyB]);
+  assert.equal(materialized.parentThreadId, parentThreadId);
+  const located = await hook.recoverInheritedReplayHistory(childThreadId, {
+    codexHome: replayFixture,
+  });
+  assert.equal(located.rolloutPath, childPath);
+  assert.equal(located.parentRolloutPath, parentPath);
+
+  const invalidPath = join(archived, `rollout-invalid-${recoveredThreadId}.jsonl`);
+  const invalidRecords = records.map((record) => JSON.parse(JSON.stringify(record)));
+  invalidRecords[0].payload.id = recoveredThreadId;
+  invalidRecords[3].payload.payload.record.attempt_id.thread = recoveredThreadId;
+  await writeFile(
+    invalidPath,
+    invalidRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+  await assert.rejects(
+    hook.readInheritedReplayHistory(invalidPath, recoveredThreadId),
+    /mixed native-to-inherited lineage/,
+  );
+
+  const replayIpc = createFakeIpcMain();
+  const observedMessages = [];
+  const replayBridge = hook.installAppServerReplayRecovery({
+    electron: { ipcMain: replayIpc },
+    recoverHistory: async () => ({
+      history: [historyA, historyB],
+      itemCount: 2,
+      parentThreadId,
+    }),
+  });
+  replayIpc.handle("codex_desktop:message-from-view", async (_event, message) => {
+    observedMessages.push(message);
+  });
+  assert.equal(replayBridge.ready, true);
+  const appServerHandler = replayIpc.handlers.get("codex_desktop:message-from-view");
+  await appServerHandler({}, {
+    type: "mcp-request",
+    request: {
+      method: "initialize",
+      params: { capabilities: { experimentalApi: true } },
+    },
+  });
+  await appServerHandler({}, {
+    type: "spine-thread-replay-aliases-sync",
+    aliases: [[childThreadId, recoveredThreadId]],
+  });
+  await appServerHandler({}, {
+    type: "mcp-request",
+    request: { method: "thread/read", params: { threadId: childThreadId } },
+  });
+  assert.equal(observedMessages.at(-1).request.params.threadId, recoveredThreadId);
+  await appServerHandler({}, {
+    type: "spine-thread-replay-recover",
+    hostId: "local",
+    errorMessage: durabilityError,
+    request: {
+      jsonrpc: "2.0",
+      id: "resume-1",
+      method: "thread/resume",
+      params: { threadId: childThreadId },
+    },
+  });
+  assert.deepEqual(observedMessages.at(-1).request.params.history, [historyA, historyB]);
+  assert.equal(observedMessages.at(-1).request.params.path, null);
+  replayBridge.dispose();
+  assert.notEqual(
+    replayIpc.handlers.get("codex_desktop:message-from-view"),
+    appServerHandler,
+  );
+} finally {
+  await rm(replayFixture, { recursive: true, force: true });
+}
+
 const rendererSha256 = createHash("sha256").update(rendererSource).digest("hex");
 const rendererPayload = hook.loadRendererPayload({
   rendererPath: fileURLToPath(rendererPath),
@@ -385,14 +517,14 @@ const identityPayload = hook.loadRendererPayload({
   rendererSha256,
   localIdentity: JSON.stringify({
     mode: "dual",
-    productVersion: "0.3.2",
+    productVersion: "0.3.3",
     compatibilityVersion: "0.147.0",
   }),
 });
 assert.equal(identityPayload.sha256, rendererSha256);
 assert.match(identityPayload.source, /^Object\.defineProperty\(globalThis/);
 assert.match(identityPayload.source, /__spineCodexLocalIdentityV1/);
-assert.match(identityPayload.source, /"productVersion":"0\.3\.2"/);
+assert.match(identityPayload.source, /"productVersion":"0\.3\.3"/);
 assert.equal(identityPayload.source.endsWith(rendererSource), true);
 assert.throws(
   () => hook.loadRendererPayload({
@@ -436,7 +568,7 @@ const recoveryIdentityPayload = hook.loadRendererPayload({
   rendererSha256: createHash("sha256").update(recoverySourceOne).digest("hex"),
   localIdentity: {
     mode: "dual",
-    productVersion: "0.3.2",
+    productVersion: "0.3.3",
     compatibilityVersion: "0.147.0",
   },
 });
@@ -496,9 +628,11 @@ const previousCodexCliPath = process.env.CODEX_CLI_PATH;
 const previousLocalCliPath = process.env.SPINE_CODEX_LOCAL_CLI_PATH;
 const previousMinimum = process.env.SPINE_CODEX_MIN_VERSION;
 let deferredElectronReady = false;
+const deferredIpcMain = createFakeIpcMain();
 const deferredElectron = {
   app: Object.assign(new EventEmitter(), { whenReady: async () => {} }),
   webContents: { getAllWebContents: () => [] },
+  ipcMain: deferredIpcMain,
 };
 try {
   await writeFile(
@@ -554,6 +688,7 @@ try {
     "/private/wrapper/bin/spine-codex",
   );
   await new Promise((resolve) => setImmediate(resolve));
+  deferredIpcMain.handle("codex_desktop:message-from-view", async () => {});
   const deferredMain = require(fixtureMain);
   assert.equal(deferredMain.cli, "spine-codex");
   assert.equal(deferredMain.check("0.2.2"), true);
@@ -561,6 +696,7 @@ try {
   const hookStatus = JSON.parse(await readFile(fixtureStatus, "utf8"));
   assert.equal(hookStatus.state, "ready");
   assert.equal(hookStatus.rendererRecovery, true);
+  assert.equal(hookStatus.appServerReplayRecovery, true);
   assert.equal(hookStatus.rendererSha256, rendererSha256);
   assert.equal(hookStatus.mainFile, "main-deferred.js");
   assert.equal(hookStatus.versionFile, "src-version.js");

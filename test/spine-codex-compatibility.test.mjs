@@ -37,14 +37,14 @@ test("distinguishes legacy, dual, and compatibility-only identities", async () =
     await mkdir(join(directory, "dual", "bin"), { recursive: true });
     await writeFile(
       join(packageRoot, "package.json"),
-      JSON.stringify({ name: "@spinejit/spine-codex", version: "0.3.2" }),
+      JSON.stringify({ name: "@spinejit/spine-codex", version: "0.3.3" }),
       "utf8",
     );
     await writeFile(packageBinary, "", "utf8");
     await symlink(packageBinary, linkedBinary);
     const dual = await inspectSpineCodexIdentity(linkedBinary, "0.147.0");
     assert.equal(dual.mode, "dual");
-    assert.equal(dual.productVersion, "0.3.2");
+    assert.equal(dual.productVersion, "0.3.3");
     assert.equal(dual.compatibilityVersion, "0.147.0");
     assert.equal(
       await realpath(dual.productPackagePath),

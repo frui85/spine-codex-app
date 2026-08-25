@@ -4,6 +4,21 @@
 
 ## 尚未发布
 
+## v0.3.3.0 - 2026-08-25
+
+以 SpineCodex 0.3.3 为正式验证基线的兼容与恢复发布，同时保留 SpineCodex
+0.2.2 最低兼容线。
+
+- 将推荐的 SpineCodex 产品基线更新到 0.3.3，并继续记录其 Codex 兼容身份
+  0.147.0。
+- 恢复受精确 `sampling commit does not match its sampling-started record`
+  durability 错位影响的继承型子 Agent 会话。App 只读重建有效原生历史，校验
+  父任务与压缩边界，恢复到替代任务，并持久化旧任务 ID 到新任务 ID 的别名。
+- 兼容真实 app-server 时序：`thread/status/changed` 可以先于 resume 响应到达，
+  同时不再向界面暴露被拦截的 fatal error。
+- 其他 replay 与 durability 错误继续 fail closed。
+- 重新生成并固化 0.3.3 Tree/Spawn 通知契约；schema 与此前 App 集成保持兼容。
+
 ## v0.3.2.0 - 2026-08-24
 
 以 SpineCodex 0.3.2 为正式验证基线的兼容发布，同时保留 SpineCodex 0.2.2

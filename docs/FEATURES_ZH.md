@@ -2,7 +2,7 @@
 
 > **简体中文** · [English](FEATURES.md)
 
-本文记录 SpineCodex App v0.3.2.0 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v0.3.3.0 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
 本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
 
@@ -39,7 +39,7 @@ AppX 可执行文件可能只是打包启动器，而不是携带 fuse wire 的 
 ssh <host> 'command -v spine-codex && spine-codex --version'
 ```
 
-SpineCodex 0.3.2 通过 `@spinejit/spine-codex/package.json` 报告产品版本，并通过 `--version` 报告 `codex-cli 0.147.0`。启动器把两者分别记录为产品身份与兼容身份。一个轻量 Electron main preload 会在保留 App 原始接受规则的同时，把兼容性检查扩展到 SpineCodex `0.2.2` 或更高版本。它根据稳定的“不支持版本”错误前缀和比较器结构识别 `src-*` 版本 bundle，而不是依赖 `wc`、`mc` 等生成的导出名。
+SpineCodex 0.3.3 通过 `@spinejit/spine-codex/package.json` 报告产品版本，并通过 `--version` 报告 `codex-cli 0.147.0`。启动器把两者分别记录为产品身份与兼容身份。一个轻量 Electron main preload 会在保留 App 原始接受规则的同时，把兼容性检查扩展到 SpineCodex `0.2.2` 或更高版本。它根据稳定的“不支持版本”错误前缀和比较器结构识别 `src-*` 版本 bundle，而不是依赖 `wc`、`mc` 等生成的导出名。
 
 同一个 preload 根据稳定的二进制缺失错误文本和 selector 结构识别本地 CLI selector。它只修改共享 `src-*` bundle 中的本地 selector；遇到未知结构时，会在 Desktop 启动被报告为 ready 前 fail closed。
 
@@ -55,7 +55,7 @@ preload 只在 Electron 浏览器主线程中运行。main chunk 和版本 chunk
 
 兼容性门禁会分别解析 SpineCodex 产品包与 `--version` 输出。原生连接卡片仍可能显示类似 `0.147.0` 的上游 core/app-server 版本，因为该值来自已连接 app-server 的 initialize 握手，而不是 CLI 产品版本探测。这不代表远程可执行文件是官方 Codex；实际 SSH 命令和进程身份才是判断后端的权威依据。
 
-本地 shim 会依次探测 `app/installed` 和 `app/read`。SpineCodex 0.3.2 走原生路径；明确拒绝任一方法的旧后端会使用保留的分页 `app/list` 兼容适配器；其他错误会报告不可用，不会被静默转换。诊断分别将三种模式标记为 `native`、`legacy-fallback` 和 `unavailable`。
+本地 shim 会依次探测 `app/installed` 和 `app/read`。SpineCodex 0.3.3 走原生路径；明确拒绝任一方法的旧后端会使用保留的分页 `app/list` 兼容适配器；其他错误会报告不可用，不会被静默转换。诊断分别将三种模式标记为 `native`、`legacy-fallback` 和 `unavailable`。
 
 如果远程主机没有 `spine-codex`，App 原生的 CLI 缺失页面仍会调用官方 Codex 安装器。不要为本包装层使用该安装器；请在远程主机安装 SpineCodex 后重新连接。由于 SSH 命令选择和最低版本检查位于 Electron 主进程中，该功能要求完整退出 App，并通过 `spine-app.mjs` 重新启动；仅对 Renderer 热注入无法启用。
 
@@ -118,6 +118,16 @@ Renderer 为最近活跃的 32 个会话保留紧凑快照，同时保护当前�
 ```js
 window.__spineCodexViewV1.clearCache()
 ```
+
+### 继承会话回放恢复
+
+当继承型子 Agent 恢复命中精确的 Spine durability
+`sampling commit does not match its sampling-started record` 错位时，主进程
+hook 可以只读重建启用 Spine 前的有效原生历史。恢复必须同时满足：存在有效
+继承父任务、存在原生压缩历史、第一条 Spine 边界为 epoch 0，且父任务 Spine
+记录匹配。Renderer 会恢复到替代任务并持久化旧任务 ID 到新任务 ID 的别名，
+包括 `thread/status/changed` 先于 resume 响应到达的时序。其他 replay 与
+durability 错误继续 fail closed。
 
 任务树状态和层级使用小型内联 SVG 图标与 CSS 连接线，不使用位图资源、文本字符分支或上下文百分比。footer 只报告无歧义的节点数。挂载区域处于折叠状态时，常规事件不会调度 render frame 或 DOM 更新。
 

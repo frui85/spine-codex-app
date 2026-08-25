@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "spineCodexProductVersion": "0.3.2",
+  "spineCodexProductVersion": "0.3.3",
   "codexCompatibilityVersion": "0.147.0",
   "generatedBy": "spine-codex app-server generate-json-schema --experimental",
   "files": {

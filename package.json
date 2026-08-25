@@ -1,9 +1,9 @@
 {
   "name": "spine-codex-app",
-  "version": "0.3.2",
-  "spineAppVersion": "0.3.2.0",
+  "version": "0.3.3",
+  "spineAppVersion": "0.3.3.0",
   "minimumSpineCodexVersion": "0.2.2",
-  "recommendedSpineCodexVersion": "0.3.2",
+  "recommendedSpineCodexVersion": "0.3.3",
   "validatedCodexCompatibilityVersion": "0.147.0",
   "validatedDesktopVersions": [
     "26.810.41047",

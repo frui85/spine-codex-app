@@ -126,6 +126,231 @@
     return match?.[0] ?? (normalized || null);
   }
 
+  function isReplayThreadId(value) {
+    return THREAD_ID_PATTERN.test(String(value ?? ""));
+  }
+
+  function isDurabilityReplayMismatch(value) {
+    return DURABILITY_REPLAY_MISMATCH_PATTERN.test(String(value ?? ""));
+  }
+
+  function replayAliasEntries() {
+    return [...state.replayAliases].map(([source, entry]) => [source, entry.target]);
+  }
+
+  function syncReplayAliases() {
+    const bridge = window.electronBridge;
+    if (typeof bridge?.sendMessageFromView !== "function") return false;
+    Promise.resolve(bridge.sendMessageFromView({
+      type: REPLAY_ALIAS_SYNC_MESSAGE,
+      hostId: "local",
+      aliases: replayAliasEntries(),
+    })).catch((error) => {
+      state.lastReplayRecovery = {
+        status: "alias-sync-failed",
+        message: String(error?.message ?? error),
+      };
+    });
+    return true;
+  }
+
+  function rememberReplayAlias(source, target) {
+    if (
+      !isReplayThreadId(source) ||
+      !isReplayThreadId(target) ||
+      source === target
+    ) return false;
+    state.replayAliases.delete(source);
+    state.replayAliases.set(source, { target, updatedAt: Date.now() });
+    while (state.replayAliases.size > MAX_THREAD_ALIASES) {
+      state.replayAliases.delete(state.replayAliases.keys().next().value);
+    }
+    writeReplayAliases();
+    syncReplayAliases();
+    return true;
+  }
+
+  function replaySourceThreadId(target) {
+    for (const [source, entry] of state.replayAliases) {
+      if (entry.target === target) return source;
+    }
+    return null;
+  }
+
+  function rewriteIncomingReplayThreadIds(data) {
+    if (!data || typeof data !== "object" || state.replayAliases.size === 0) {
+      return false;
+    }
+    let changed = false;
+    const rewrite = (holder, key) => {
+      const source = replaySourceThreadId(holder?.[key]);
+      if (!source) return;
+      try {
+        holder[key] = source;
+        changed = true;
+      } catch {}
+    };
+    rewrite(data, "threadId");
+    rewrite(data.params, "threadId");
+    rewrite(data.params?.thread, "id");
+    const response = data.message ?? data.response;
+    rewrite(response?.result, "threadId");
+    rewrite(response?.result?.thread, "id");
+    return changed;
+  }
+
+  function rememberOutgoingResume(event) {
+    const message = event?.detail;
+    const request = message?.request;
+    const requestId = request?.id == null ? null : String(request.id);
+    const threadId = request?.params?.threadId;
+    if (
+      message?.type !== "mcp-request" ||
+      message.hostId !== "local" ||
+      request?.method !== "thread/resume" ||
+      request.params?.history != null ||
+      !requestId ||
+      !isReplayThreadId(threadId)
+    ) return;
+    state.pendingResumeRequests.delete(requestId);
+    state.pendingResumeRequests.set(requestId, {
+      hostId: message.hostId,
+      request: {
+        ...request,
+        params: { ...request.params },
+      },
+    });
+    state.failedRecoveryIds.delete(requestId);
+    while (state.pendingResumeRequests.size > MAX_THREAD_ALIASES) {
+      state.pendingResumeRequests.delete(state.pendingResumeRequests.keys().next().value);
+    }
+  }
+
+  function replayResponse(data) {
+    if (data?.type !== "mcp-response") return null;
+    return data.message ?? data.response ?? null;
+  }
+
+  function redispatchReplayFailure(data) {
+    if (typeof window.postMessage !== "function") return;
+    queueMicrotask(() => window.postMessage(data, "*"));
+  }
+
+  function requestReplayRecovery(requestId, pending, errorMessage, originalData) {
+    const bridge = window.electronBridge;
+    if (
+      typeof bridge?.sendMessageFromView !== "function" ||
+      state.recoveringResumeRequests.size !== 0
+    ) return false;
+    state.recoveringResumeRequests.set(requestId, {
+      threadId: pending.request.params.threadId,
+      startedAt: Date.now(),
+    });
+    state.lastReplayRecovery = {
+      status: "recovering",
+      threadId: pending.request.params.threadId,
+    };
+    Promise.resolve(bridge.sendMessageFromView({
+      type: REPLAY_RECOVERY_MESSAGE,
+      hostId: pending.hostId,
+      request: pending.request,
+      errorMessage,
+    })).catch((error) => {
+      state.recoveringResumeRequests.delete(requestId);
+      state.pendingResumeRequests.delete(requestId);
+      state.failedRecoveryIds.add(requestId);
+      state.lastReplayRecovery = {
+        status: "failed",
+        threadId: pending.request.params.threadId,
+        message: String(error?.message ?? error),
+      };
+      console.error("[SpineCodex] App-level replay recovery failed:", error);
+      redispatchReplayFailure(originalData);
+    });
+    return true;
+  }
+
+  function adoptReplayAliasFromStatusNotification(data) {
+    if (
+      data?.type !== "mcp-notification" ||
+      data.method !== "thread/status/changed" ||
+      state.recoveringResumeRequests.size !== 1
+    ) return false;
+    const [[, recovering]] = state.recoveringResumeRequests;
+    const actualThreadId = data.params?.threadId;
+    if (
+      Date.now() - recovering.startedAt > 10_000 ||
+      !isReplayThreadId(actualThreadId) ||
+      actualThreadId === recovering.threadId ||
+      replaySourceThreadId(actualThreadId) != null
+    ) return false;
+    const remembered = rememberReplayAlias(recovering.threadId, actualThreadId);
+    if (remembered) {
+      state.lastReplayRecovery = {
+        status: "recovering",
+        threadId: recovering.threadId,
+        actualThreadId,
+      };
+    }
+    return remembered;
+  }
+
+  function handleReplayRecoveryMessage(event) {
+    const data = event?.data;
+    adoptReplayAliasFromStatusNotification(data);
+    const response = replayResponse(data);
+    const requestId = response?.id == null ? null : String(response.id);
+    const pending = requestId ? state.pendingResumeRequests.get(requestId) : null;
+    const recovering = requestId
+      ? state.recoveringResumeRequests.get(requestId)
+      : null;
+    const errorMessage = response?.error?.message ?? "";
+
+    if (
+      pending &&
+      isDurabilityReplayMismatch(errorMessage) &&
+      !recovering &&
+      !state.failedRecoveryIds.has(requestId) &&
+      requestReplayRecovery(requestId, pending, errorMessage, data)
+    ) {
+      event.stopImmediatePropagation?.();
+      return true;
+    }
+
+    if (recovering && response) {
+      state.recoveringResumeRequests.delete(requestId);
+      state.pendingResumeRequests.delete(requestId);
+      if (response.error) {
+        state.failedRecoveryIds.add(requestId);
+        state.lastReplayRecovery = {
+          status: "failed",
+          threadId: recovering.threadId,
+          message: String(response.error.message ?? "App Server recovery failed"),
+        };
+      } else {
+        const actualThreadId = response.result?.thread?.id;
+        if (rememberReplayAlias(recovering.threadId, actualThreadId)) {
+          state.lastReplayRecovery = {
+            status: "recovered",
+            threadId: recovering.threadId,
+            actualThreadId,
+          };
+        } else {
+          state.lastReplayRecovery = {
+            status: "failed",
+            threadId: recovering.threadId,
+            message: "Recovery response did not contain a new thread ID",
+          };
+        }
+      }
+    } else if (response && pending && !isDurabilityReplayMismatch(errorMessage)) {
+      state.pendingResumeRequests.delete(requestId);
+    }
+
+    rewriteIncomingReplayThreadIds(data);
+    return false;
+  }
+
   function mainThreadId() {
     const mainThread = document.querySelector?.('[data-pip-anchor-host="codex-main-thread"]');
     const annotated = mainThread?.querySelector("[data-response-annotation-conversation]");

@@ -4,6 +4,24 @@
 
 ## Unreleased
 
+## v0.3.3.0 — 2026-08-25
+
+Compatibility and recovery release validated against SpineCodex 0.3.3 while
+retaining the SpineCodex 0.2.2 minimum.
+
+- Updates the recommended SpineCodex product baseline to 0.3.3 while retaining
+  its Codex-compatible identity 0.147.0.
+- Recovers inherited subagent conversations affected by the exact
+  `sampling commit does not match its sampling-started record` durability
+  mismatch. The App reconstructs the effective native history read-only,
+  validates the parent and compaction boundary, resumes into a replacement
+  thread, and persists the old-to-new thread alias.
+- Handles the real app-server ordering where `thread/status/changed` may arrive
+  before the resume response, without exposing the intercepted fatal error.
+- Keeps unrelated replay and durability failures fail closed.
+- Regenerates and pins the 0.3.3 Tree/Spawn notification contracts; their
+  schemas remain compatible with the prior App integration.
+
 ## v0.3.2.0 — 2026-08-24
 
 Compatibility release validated against SpineCodex 0.3.2 while retaining the

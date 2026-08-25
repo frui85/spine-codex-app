@@ -2,7 +2,7 @@
 
 > [简体中文](FEATURES_ZH.md) · **English**
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.2.0. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.0. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -88,7 +88,7 @@ works in a non-interactive login shell:
 ssh <host> 'command -v spine-codex && spine-codex --version'
 ```
 
-SpineCodex 0.3.2 reports the product release through
+SpineCodex 0.3.3 reports the product release through
 `@spinejit/spine-codex/package.json` and reports `codex-cli 0.147.0` through
 `--version`. The launcher records these as separate product and compatibility
 identities. A tiny Electron-main preload extends Desktop's compatibility check
@@ -148,7 +148,7 @@ initialize handshake rather than from the CLI probe. It does not mean the
 remote executable was official Codex; the actual SSH command and process
 identity are the authoritative backend check.
 
-The local shim probes `app/installed` followed by `app/read`. SpineCodex 0.3.2
+The local shim probes `app/installed` followed by `app/read`. SpineCodex 0.3.3
 uses this path natively. A backend that explicitly rejects either method uses
 the retained, paginated `app/list` compatibility adapter; other errors are
 reported as unavailable instead of being silently converted. Diagnostics name
@@ -399,6 +399,17 @@ immediately from the renderer console, run:
 ```js
 window.__spineCodexViewV1.clearCache()
 ```
+
+### Inherited replay recovery
+
+When an inherited subagent resume fails with the exact Spine durability
+`sampling commit does not match its sampling-started record` mismatch, the
+main-process hook can reconstruct the effective pre-Spine native history
+read-only. Recovery requires a valid inherited parent, native compaction
+history, an epoch-zero first Spine boundary, and a matching parent Spine
+record. The renderer resumes a replacement thread and persists the old-to-new
+thread alias, including when `thread/status/changed` arrives before the resume
+response. Other replay and durability failures remain fail closed.
 
 Tree status and hierarchy use small inline SVG icons and CSS connectors—there
 are no bitmap assets, text-art branch characters, or context percentages. The

@@ -25,6 +25,7 @@
 
   function onMessage(event) {
     const data = event.data;
+    if (handleReplayRecoveryMessage(event)) return;
     const settledFetch = settleCodexFetchResponse(data);
     const settledAppServer = settleAppServerResponse(data);
     if (!settledFetch && !settledAppServer) ingest(data);
@@ -213,6 +214,7 @@
     connectThreadObserver();
     connectSummarySurfaceObserver();
     loadHostCatalog();
+    syncReplayAliases();
     scheduleMount(60);
     scheduleSettingsMount(30);
     scheduleNativeSubagentLabelSync(24);
@@ -236,18 +238,26 @@
     stopNativeSubagentListObserver();
     stopNativeSubagentTitleHook();
     state.threadAliases.clear();
+    state.replayAliases.clear();
+    syncReplayAliases();
+    state.pendingResumeRequests.clear();
+    state.recoveringResumeRequests.clear();
+    state.failedRecoveryIds.clear();
+    state.lastReplayRecovery = null;
     state.rows.clear();
     closeWorkspaceDetail(false, true);
     try {
       localStorage.removeItem(SNAPSHOT_CACHE_KEY);
       localStorage.removeItem(SPAWN_INTENT_CACHE_KEY);
       localStorage.removeItem(THREAD_ALIASES_KEY);
+      localStorage.removeItem(REPLAY_ALIASES_KEY);
     } catch {}
     renderActiveNow();
     return true;
   }
 
   window.addEventListener("message", onMessage, true);
+  window.addEventListener(APP_SERVER_VIEW_EVENT, rememberOutgoingResume, true);
   window.addEventListener("resize", onResize, { passive: true });
   window.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("click", onSidebarClick, true);
@@ -296,6 +306,10 @@
       subagentLabelSyncPending: state.subagentLabelFrame !== 0,
       subagentListObserved: Boolean(state.subagentListObserver),
       subagentTitleHookPending: Boolean(state.subagentTitleObserver),
+      replayRecoveryAliases: state.replayAliases.size,
+      replayRecoveryPending: state.pendingResumeRequests.size,
+      replayRecoveryInFlight: state.recoveringResumeRequests.size,
+      lastReplayRecovery: state.lastReplayRecovery,
     }),
     exportSnapshots: () => [...state.snapshots.values()],
     exportSpawnIntents: () => [...state.spawnIntents.entries()].map(
@@ -357,6 +371,7 @@
     destroy: () => {
       state.destroyed = true;
       window.removeEventListener("message", onMessage, true);
+      window.removeEventListener(APP_SERVER_VIEW_EVENT, rememberOutgoingResume, true);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("languagechange", onLanguageChange);

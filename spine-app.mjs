@@ -17,7 +17,7 @@ import {
 } from "./lib/spine-codex-compatibility.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.3.2.0";
+const APP_VERSION = "0.3.3.0";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -26,7 +26,7 @@ const LOCAL_CLI_SHIM = join(
 const ELECTRON_MAIN_HOOK = join(HERE, "spine-electron-main-hook.cjs");
 const REMOTE_CLI_NAME = "spine-codex";
 const MIN_SPINE_CODEX_VERSION = "0.2.2";
-const RECOMMENDED_SPINE_CODEX_VERSION = "0.3.2";
+const RECOMMENDED_SPINE_CODEX_VERSION = "0.3.3";
 const VALIDATED_CODEX_COMPATIBILITY_VERSION = "0.147.0";
 const VALIDATED_DESKTOP_VERSIONS = ["26.810.41047", "26.818.41509"];
 const MIN_NODE_VERSION = "22.0.0";

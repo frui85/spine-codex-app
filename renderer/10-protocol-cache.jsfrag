@@ -33,6 +33,50 @@
     } catch {}
   }
 
+  function readReplayAliases() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(REPLAY_ALIASES_KEY) || "null");
+      if (saved?.version !== REPLAY_ALIAS_CACHE_VERSION || !Array.isArray(saved.entries)) {
+        return new Map();
+      }
+      const cutoff = Date.now() - REPLAY_ALIAS_MAX_AGE_MS;
+      const aliases = new Map();
+      for (const entry of saved.entries) {
+        const source = entry?.source;
+        const target = entry?.target;
+        const updatedAt = Number(entry?.updatedAt);
+        if (
+          isReplayThreadId(source) &&
+          isReplayThreadId(target) &&
+          source !== target &&
+          Number.isFinite(updatedAt) &&
+          updatedAt >= cutoff
+        ) {
+          aliases.set(source, { target, updatedAt });
+        }
+      }
+      while (aliases.size > MAX_THREAD_ALIASES) {
+        aliases.delete(aliases.keys().next().value);
+      }
+      return aliases;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function writeReplayAliases() {
+    try {
+      localStorage.setItem(REPLAY_ALIASES_KEY, JSON.stringify({
+        version: REPLAY_ALIAS_CACHE_VERSION,
+        entries: [...state.replayAliases].map(([source, entry]) => ({
+          source,
+          target: entry.target,
+          updatedAt: entry.updatedAt,
+        })),
+      }));
+    } catch {}
+  }
+
   function jsonSafeScalar(value, fallback = 0) {
     if (typeof value === "bigint") return value.toString();
     if (typeof value === "number" || typeof value === "string") return value;

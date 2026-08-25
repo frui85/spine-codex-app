@@ -7,6 +7,7 @@ const windowListeners = new Map();
 const documentListeners = new Map();
 const storage = new Map([["spine-codex.view.expanded", "false"]]);
 const idleCallbacks = new Map();
+const bridgeMessages = [];
 const canonicalThreadId = "00000000-0000-0000-0000-000000000001";
 const annotation = {
   getAttribute(name) {
@@ -29,6 +30,12 @@ const temporarySidebarItem = {
   classList: { contains: () => true },
 };
 globalThis.window = globalThis;
+globalThis.electronBridge = {
+  sendMessageFromView(message) {
+    bridgeMessages.push(message);
+    return Promise.resolve();
+  },
+};
 globalThis.location = { pathname: "/", hash: "" };
 globalThis.history = {
   pushState() {},
@@ -79,6 +86,9 @@ globalThis.document = {
 globalThis.Node = { ELEMENT_NODE: 1 };
 globalThis.addEventListener = (type, listener) => windowListeners.set(type, listener);
 globalThis.removeEventListener = (type) => windowListeners.delete(type);
+globalThis.postMessage = (data) => {
+  queueMicrotask(() => windowListeners.get("message")?.({ data }));
+};
 let nextFrame = 0;
 globalThis.requestAnimationFrame = () => ++nextFrame;
 globalThis.cancelAnimationFrame = () => {};
@@ -94,7 +104,7 @@ const source = fs.readFileSync(
   new URL("../spine-view.js", import.meta.url),
   "utf8",
 );
-const contractRoot = new URL("./fixtures/spine-codex-0.3.2/", import.meta.url);
+const contractRoot = new URL("./fixtures/spine-codex-0.3.3/", import.meta.url);
 const contractManifest = JSON.parse(fs.readFileSync(
   new URL("manifest.json", contractRoot),
   "utf8",
@@ -112,7 +122,7 @@ function readContract(name) {
 }
 const treeContract = readContract("SpineTreeUpdatedNotification.json");
 const spawnContract = readContract("SpineSpawnProgressUpdatedNotification.json");
-assert.equal(contractManifest.spineCodexProductVersion, "0.3.2");
+assert.equal(contractManifest.spineCodexProductVersion, "0.3.3");
 assert.equal(contractManifest.codexCompatibilityVersion, "0.147.0");
 assert.equal(treeContract.title, "SpineTreeUpdatedNotification");
 assert.equal(spawnContract.title, "SpineSpawnProgressUpdatedNotification");
@@ -130,8 +140,61 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.3.2.0");
-assert.equal(api.revision, 10);
+assert.equal(api.version, "0.3.3.0");
+assert.equal(api.revision, 11);
+
+const recoveredThreadId = "00000000-0000-0000-0000-000000000099";
+const resumeRequest = {
+  type: "mcp-request",
+  hostId: "local",
+  request: {
+    jsonrpc: "2.0",
+    id: "resume-recovery-1",
+    method: "thread/resume",
+    params: { threadId: canonicalThreadId, history: null },
+  },
+};
+windowListeners.get("codex-message-from-view")({ detail: resumeRequest });
+let fatalStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-recovery-1",
+      error: {
+        message: "Fatal error: Spine durability is faulted: Spine replay failed: sampling commit does not match its sampling-started record",
+      },
+    },
+  },
+  stopImmediatePropagation() { fatalStopped = true; },
+});
+assert.equal(fatalStopped, true);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-recover");
+assert.equal(bridgeMessages.at(-1).request.params.threadId, canonicalThreadId);
+
+const earlyStatusNotification = {
+  type: "mcp-notification",
+  method: "thread/status/changed",
+  params: { threadId: recoveredThreadId, status: { type: "idle" } },
+};
+windowListeners.get("message")({ data: earlyStatusNotification });
+assert.equal(earlyStatusNotification.params.threadId, canonicalThreadId);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-aliases-sync");
+assert.deepEqual(bridgeMessages.at(-1).aliases, [[canonicalThreadId, recoveredThreadId]]);
+
+const recoveryResponse = {
+  type: "mcp-response",
+  message: {
+    id: "resume-recovery-1",
+    result: { thread: { id: recoveredThreadId } },
+  },
+};
+windowListeners.get("message")({ data: recoveryResponse });
+assert.equal(recoveryResponse.message.result.thread.id, canonicalThreadId);
+assert.equal(
+  JSON.parse(storage.get("spine-codex.view.replay-aliases.v1")).entries[0].target,
+  recoveredThreadId,
+);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -263,7 +326,7 @@ assert.equal(
 );
 globalThis.__spineCodexLocalIdentityV1 = Object.freeze({
   mode: "dual",
-  productVersion: "0.3.2",
+  productVersion: "0.3.3",
   compatibilityVersion: "0.147.0",
 });
 assert.deepEqual(
@@ -283,7 +346,7 @@ assert.deepEqual(
   ]),
   {
     hostId: "local",
-    productVersion: "0.3.2",
+    productVersion: "0.3.3",
     compatibilityVersion: "0.147.0",
     spawnDefaultEnabled: true,
     spawnEnabled: true,
@@ -1075,6 +1138,14 @@ assert.deepEqual(api.getStats(), {
   subagentLabelSyncPending: false,
   subagentListObserved: false,
   subagentTitleHookPending: false,
+  replayRecoveryAliases: 1,
+  replayRecoveryPending: 0,
+  replayRecoveryInFlight: 0,
+  lastReplayRecovery: {
+    status: "recovered",
+    threadId: canonicalThreadId,
+    actualThreadId: recoveredThreadId,
+  },
 });
 assert.equal(windowListeners.has("message"), true);
 const messageListener = windowListeners.get("message");
@@ -1142,8 +1213,8 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.3.2.0");
-assert.equal(restoredApi.revision, 10);
+assert.equal(restoredApi.version, "0.3.3.0");
+assert.equal(restoredApi.revision, 11);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&
@@ -1173,6 +1244,9 @@ assert.equal(restoredApi.getStats().threads, 0);
 assert.equal(storage.has("spine-codex.view.snapshots.v1"), false);
 assert.equal(storage.has("spine-codex.view.spawn-intents.v1"), false);
 assert.equal(storage.has("spine-codex.view.thread-aliases"), false);
+assert.equal(storage.has("spine-codex.view.replay-aliases.v1"), false);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-aliases-sync");
+assert.deepEqual(bridgeMessages.at(-1).aliases, []);
 restoredApi.destroy();
 
 console.log(
