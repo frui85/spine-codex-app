@@ -4,6 +4,20 @@
 
 ## 尚未发布
 
+## v0.3.3.1 - 2026-08-31
+
+仅 App 的 durability 恢复更新，继续以未修改的官方
+`@spinejit/spine-codex@0.3.3` 为验证基线。
+
+- 恢复一种精确的 context-plan 故障：SpineCodex 已接受 `spine.close` 或
+  `spine.next` memory，但投影后的 fragment 超过 8,000 UTF-8 bytes。
+- 克隆历史到替代任务前，校验源 rollout、匹配的工具调用、accepted 回执和
+  错误报告的 fragment 大小。
+- 只在克隆历史中按 UTF-8 边界、观测到的投影预算缩短 memory；原始会话和
+  已安装 CLI 保持不变。
+- 同时处理首次 context-plan fatal 及其 durability-faulted 包装错误；无关错误
+  和边界大小错误继续 fail closed。
+
 ## v0.3.3.0 - 2026-08-25
 
 以 SpineCodex 0.3.3 为正式验证基线的兼容与恢复发布，同时保留 SpineCodex

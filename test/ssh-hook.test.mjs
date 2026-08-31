@@ -384,8 +384,43 @@ function createFakeIpcMain() {
 const durabilityError =
   "Fatal error: Spine durability is faulted: Spine replay failed: " +
   "sampling commit does not match its sampling-started record";
+const memoryOverflowError =
+  "Fatal error: Spine context plan failed: " +
+  "Spine memory fragment is 9005 bytes; maximum is 8000";
+const wrappedMemoryOverflowError =
+  "Fatal error: Spine durability is faulted: Spine context plan failed: " +
+  "Spine memory fragment is 9005 bytes; maximum is 8000";
 assert.equal(hook.isDurabilityReplayMismatch(durabilityError), true);
 assert.equal(hook.isDurabilityReplayMismatch("different replay failure"), false);
+assert.deepEqual(hook.parseSpineMemoryOverflow(memoryOverflowError), {
+  fragmentBytes: 9005,
+});
+assert.deepEqual(hook.parseSpineMemoryOverflow(wrappedMemoryOverflowError), {
+  fragmentBytes: 9005,
+});
+assert.equal(
+  hook.parseSpineMemoryOverflow(
+    "Spine context plan failed: Spine memory fragment is 8000 bytes; maximum is 8000",
+  ),
+  null,
+);
+assert.equal(
+  hook.parseSpineMemoryOverflow(
+    "Spine context plan failed: Spine node fragment is 9005 bytes; maximum is 8000",
+  ),
+  null,
+);
+assert.equal(hook.isRecoverableSpineFailure(durabilityError), true);
+assert.equal(hook.isRecoverableSpineFailure(memoryOverflowError), true);
+assert.equal(hook.isRecoverableSpineFailure(wrappedMemoryOverflowError), true);
+assert.equal(hook.isRecoverableSpineFailure("different durability failure"), false);
+
+const multibyteMemory = "界".repeat(2_986) + "ab";
+assert.equal(Buffer.byteLength(multibyteMemory), 8_960);
+const shortenedMemory = hook.truncateUtf8WithSuffix(multibyteMemory, 7_955, "\n[fixed]");
+assert.equal(Buffer.byteLength(shortenedMemory) <= 7_955, true);
+assert.equal(shortenedMemory.endsWith("\n[fixed]"), true);
+assert.equal(shortenedMemory.includes("\uFFFD"), false);
 
 const childThreadId = "00000000-0000-0000-0000-000000000041";
 const parentThreadId = "00000000-0000-0000-0000-000000000042";
@@ -451,6 +486,87 @@ try {
     /mixed native-to-inherited lineage/,
   );
 
+  const overflowThreadId = "00000000-0000-0000-0000-000000000044";
+  const overflowPath = join(archived, `rollout-overflow-${overflowThreadId}.jsonl`);
+  const overflowCallId = "call-overflow-close";
+  const overflowArguments = JSON.stringify({ memory: multibyteMemory });
+  const overflowRecords = [
+    {
+      type: "session_meta",
+      payload: { id: overflowThreadId, thread_source: "user" },
+    },
+    { type: "response_item", payload: historyA },
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "spine.close",
+        arguments: overflowArguments,
+        call_id: overflowCallId,
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call_output",
+        call_id: overflowCallId,
+        output: "Spine close accepted.",
+      },
+    },
+    {
+      type: "event_msg",
+      payload: {
+        type: "task_complete",
+        error: { message: memoryOverflowError },
+      },
+    },
+  ];
+  await writeFile(
+    overflowPath,
+    overflowRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+  const overflowRecovered = await hook.readMemoryOverflowReplayHistory(
+    overflowPath,
+    overflowThreadId,
+    memoryOverflowError,
+  );
+  assert.equal(overflowRecovered.itemCount, 3);
+  assert.equal(overflowRecovered.originalMemoryBytes, 8_960);
+  assert.equal(overflowRecovered.repairedMemoryBytes <= 7_955, true);
+  assert.equal(overflowRecovered.fragmentBytes, 9_005);
+  const recoveredArguments = JSON.parse(overflowRecovered.history[1].arguments);
+  assert.equal(Buffer.byteLength(recoveredArguments.memory) <= 7_955, true);
+  assert.equal(recoveredArguments.memory.includes("\uFFFD"), false);
+  assert.match(recoveredArguments.memory, /SpineCodex App: memory shortened/);
+  assert.equal(
+    JSON.parse(overflowArguments).memory,
+    multibyteMemory,
+    "the source transition remains unchanged",
+  );
+  const locatedOverflow = await hook.recoverMemoryOverflowReplayHistory(
+    overflowThreadId,
+    wrappedMemoryOverflowError,
+    { codexHome: replayFixture },
+  );
+  assert.equal(locatedOverflow.rolloutPath, overflowPath);
+  assert.equal(locatedOverflow.originalMemoryBytes, 8_960);
+
+  const unacceptedPath = join(archived, `rollout-unaccepted-${overflowThreadId}.jsonl`);
+  const unacceptedRecords = overflowRecords.map((record) => structuredClone(record));
+  unacceptedRecords[3].payload.output = "Spine close rejected.";
+  await writeFile(
+    unacceptedPath,
+    unacceptedRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+  await assert.rejects(
+    hook.readMemoryOverflowReplayHistory(
+      unacceptedPath,
+      overflowThreadId,
+      memoryOverflowError,
+    ),
+    /accepted overflowing transition/,
+  );
+
   const replayIpc = createFakeIpcMain();
   const observedMessages = [];
   const replayBridge = hook.installAppServerReplayRecovery({
@@ -460,6 +576,13 @@ try {
       itemCount: 2,
       parentThreadId,
     }),
+    recoverMemoryOverflowHistory: async (_threadId, errorMessage) => {
+      assert.equal(errorMessage, wrappedMemoryOverflowError);
+      return {
+        history: overflowRecovered.history,
+        itemCount: overflowRecovered.itemCount,
+      };
+    },
   });
   replayIpc.handle("codex_desktop:message-from-view", async (_event, message) => {
     observedMessages.push(message);
@@ -495,6 +618,33 @@ try {
   });
   assert.deepEqual(observedMessages.at(-1).request.params.history, [historyA, historyB]);
   assert.equal(observedMessages.at(-1).request.params.path, null);
+  await appServerHandler({}, {
+    type: "spine-thread-replay-recover",
+    hostId: "local",
+    errorMessage: wrappedMemoryOverflowError,
+    request: {
+      jsonrpc: "2.0",
+      id: "resume-overflow",
+      method: "thread/resume",
+      params: { threadId: overflowThreadId },
+    },
+  });
+  assert.equal(observedMessages.at(-1).request.params.path, null);
+  assert.equal(observedMessages.at(-1).request.params.history.length, 3);
+  await assert.rejects(
+    appServerHandler({}, {
+      type: "spine-thread-replay-recover",
+      hostId: "local",
+      errorMessage:
+        "Fatal error: Spine context plan failed: " +
+        "Spine memory fragment is 8000 bytes; maximum is 8000",
+      request: {
+        method: "thread/resume",
+        params: { threadId: overflowThreadId },
+      },
+    }),
+    /outside the guarded recovery scope/,
+  );
   replayBridge.dispose();
   assert.notEqual(
     replayIpc.handlers.get("codex_desktop:message-from-view"),

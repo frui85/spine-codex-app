@@ -2,7 +2,7 @@
 
 > **简体中文** · [English](FEATURES.md)
 
-本文记录 SpineCodex App v0.3.3.0 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v0.3.3.1 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
 本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
 
@@ -119,7 +119,7 @@ Renderer 为最近活跃的 32 个会话保留紧凑快照，同时保护当前�
 window.__spineCodexViewV1.clearCache()
 ```
 
-### 继承会话回放恢复
+### Durability 会话恢复
 
 当继承型子 Agent 恢复命中精确的 Spine durability
 `sampling commit does not match its sampling-started record` 错位时，主进程
@@ -128,6 +128,14 @@ hook 可以只读重建启用 Spine 前的有效原生历史。恢复必须同�
 记录匹配。Renderer 会恢复到替代任务并持久化旧任务 ID 到新任务 ID 的别名，
 包括 `thread/status/changed` 先于 resume 响应到达的时序。其他 replay 与
 durability 错误继续 fail closed。
+
+同一条仅限 App 的恢复路径也会处理一种精确的 context-plan 错误：SpineCodex
+接受了 `spine.close` 或 `spine.next` 的 memory，但投影后的 fragment 超过
+8,000 UTF-8 bytes。主进程 hook 会先校验匹配的工具调用、accepted 回执、错误
+报告的 fragment 大小和源会话，再克隆历史；随后只在克隆历史中按 UTF-8 边界
+缩短 memory，并将恢复标记计入观测到的投影预算，最后恢复到替代任务。原始
+rollout 和已安装的 SpineCodex CLI 都不会改变。边界大小、格式异常以及无关的
+context-plan 错误继续 fail closed。
 
 任务树状态和层级使用小型内联 SVG 图标与 CSS 连接线，不使用位图资源、文本字符分支或上下文百分比。footer 只报告无歧义的节点数。挂载区域处于折叠状态时，常规事件不会调度 render frame 或 DOM 更新。
 

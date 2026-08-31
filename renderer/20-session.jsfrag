@@ -130,8 +130,11 @@
     return THREAD_ID_PATTERN.test(String(value ?? ""));
   }
 
-  function isDurabilityReplayMismatch(value) {
-    return DURABILITY_REPLAY_MISMATCH_PATTERN.test(String(value ?? ""));
+  function isRecoverableSpineFailure(value) {
+    const message = String(value ?? "");
+    if (DURABILITY_REPLAY_MISMATCH_PATTERN.test(message)) return true;
+    const overflow = message.match(SPINE_MEMORY_OVERFLOW_PATTERN);
+    return overflow != null && Number(overflow[1]) > 8_000;
   }
 
   function replayAliasEntries() {
@@ -308,7 +311,7 @@
 
     if (
       pending &&
-      isDurabilityReplayMismatch(errorMessage) &&
+      isRecoverableSpineFailure(errorMessage) &&
       !recovering &&
       !state.failedRecoveryIds.has(requestId) &&
       requestReplayRecovery(requestId, pending, errorMessage, data)
@@ -343,7 +346,7 @@
           };
         }
       }
-    } else if (response && pending && !isDurabilityReplayMismatch(errorMessage)) {
+    } else if (response && pending && !isRecoverableSpineFailure(errorMessage)) {
       state.pendingResumeRequests.delete(requestId);
     }
 

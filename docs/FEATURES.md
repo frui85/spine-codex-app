@@ -2,7 +2,7 @@
 
 > [简体中文](FEATURES_ZH.md) · **English**
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.0. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.1. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -400,7 +400,7 @@ immediately from the renderer console, run:
 window.__spineCodexViewV1.clearCache()
 ```
 
-### Inherited replay recovery
+### Durability recovery
 
 When an inherited subagent resume fails with the exact Spine durability
 `sampling commit does not match its sampling-started record` mismatch, the
@@ -410,6 +410,16 @@ history, an epoch-zero first Spine boundary, and a matching parent Spine
 record. The renderer resumes a replacement thread and persists the old-to-new
 thread alias, including when `thread/status/changed` arrives before the resume
 response. Other replay and durability failures remain fail closed.
+
+The same App-only recovery path handles the exact context-plan failure emitted
+when SpineCodex accepts a `spine.close` or `spine.next` memory whose projected
+fragment exceeds 8,000 UTF-8 bytes. The main-process hook validates the matching
+tool call, acceptance output, reported fragment size, and source session before
+cloning history. It then truncates only the cloned memory at a UTF-8 boundary,
+including a recovery marker within the observed projection budget, and resumes
+a replacement thread. The original rollout and installed SpineCodex CLI remain
+unchanged. Boundary-size, malformed, and unrelated context-plan failures remain
+fail closed.
 
 Tree status and hierarchy use small inline SVG icons and CSS connectors—there
 are no bitmap assets, text-art branch characters, or context percentages. The

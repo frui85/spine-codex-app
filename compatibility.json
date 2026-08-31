@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "spineCodexAppVersion": "0.3.3.0",
+  "spineCodexAppVersion": "0.3.3.1",
   "local": {
     "minimumSpineCodexVersion": "0.2.2",
     "recommendedSpineCodexVersion": "0.3.3",
