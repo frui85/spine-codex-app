@@ -72,18 +72,20 @@ function remoteSpineIdentitySource() {
 }
 
 function remoteBootstrapPrefixSource({
-  forwardedAgentSetupVariable = null,
-  forwardedAgentSocketVariable = null,
-} = {}) {
+  controlDirectoryVariable,
+  forwardedAgentSetupVariable,
+  forwardedAgentSocketVariable,
+  logPathVariable,
+}) {
+  const privatePathSetupSource =
+    "`control_dir=`," + controlDirectoryVariable +
+    ",`; (umask 077; mkdir -p -- \"$control_dir\" && : >`," +
+    logPathVariable + ",`) || exit $?; ";
   const forwardedAgentSource =
-    forwardedAgentSetupVariable != null &&
-    forwardedAgentSocketVariable != null
-      ? "`," + forwardedAgentSetupVariable +
-        ",` && SSH_AUTH_SOCK=`," + forwardedAgentSocketVariable + ",` "
-      : "";
+    "`," + forwardedAgentSetupVariable +
+    ",` && SSH_AUTH_SOCK=`," + forwardedAgentSocketVariable + ",` ";
   return [
-    "` || exit $?; ",
-    "control_dir=\"\\${CODEX_HOME:-$HOME/.codex}/app-server-control\"; ",
+    privatePathSetupSource,
     "control_socket=\"$control_dir/app-server-control.sock\"; ",
     "lock_dir=\"$control_dir/spine-codex-bootstrap.lock\"; current_uid=$(id -u); ",
     "lock_attempt=0; while ! mkdir \"$lock_dir\" 2>/dev/null; do ",
@@ -143,37 +145,30 @@ function remoteBootstrapSuffixSource(logPathVariable) {
 }
 
 function patchRemoteBootstrapCleanupSource(source) {
-  const cleanupVariants = [
-    {
-      pattern:
-        /` && \(pkill[^,]+`,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && nohup `/g,
-      replacement: () => remoteBootstrapPrefixSource(),
-    },
-    {
-      // Codex 26.803+ prepares a forwarded SSH-agent socket between stale
-      // app-server cleanup and launch. Preserve both minified variables while
-      // replacing only the unsafe process cleanup and readiness behavior.
-      pattern:
-        /` && \(pkill[^,]+`,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && `,([A-Za-z_$][\w$]*),` && SSH_AUTH_SOCK=`,([A-Za-z_$][\w$]*),` nohup `/g,
-      replacement: (_, forwardedAgentSetupVariable, forwardedAgentSocketVariable) =>
-        remoteBootstrapPrefixSource({
-          forwardedAgentSetupVariable,
-          forwardedAgentSocketVariable,
-        }),
-    },
-  ];
-  const matches = cleanupVariants.flatMap(({ pattern, replacement }) =>
-    Array.from(String(source).matchAll(pattern), (match) => ({
-      match,
-      pattern,
-      replacement,
-    })),
-  );
+  // Track the current stable Codex Desktop SSH bootstrap exactly. This shape
+  // creates private control paths, prepares a forwarded SSH agent, and clears
+  // the log in one umask-scoped subshell before launching the app-server.
+  const cleanupPattern =
+    /`\(umask 077; mkdir -p -- `,([A-Za-z_$][\w$]*),` && \(pkill -9 -U "\$\(id -u\)" -f `,[^,]+\(`\$\{[^}]+\}\.\*\[d\]esktop-ssh-websocket-v0\.sock`\),` \|\| true\) && `,([A-Za-z_$][\w$]*),` && : >`,([A-Za-z_$][\w$]*),`\) && SSH_AUTH_SOCK=`,([A-Za-z_$][\w$]*),` nohup `/g;
+  const matches = Array.from(String(source).matchAll(cleanupPattern));
   if (matches.length !== 1) {
     throw new Error("Codex SSH app-server cleanup has an unsupported structure");
   }
-  const [{ pattern: cleanupPattern, replacement: cleanupReplacement }] = matches;
-  let patched = String(source).replace(cleanupPattern, cleanupReplacement);
+  const [
+    ,
+    controlDirectoryVariable,
+    forwardedAgentSetupVariable,
+    logPathVariable,
+    forwardedAgentSocketVariable,
+  ] = matches[0];
+  let patched = String(source).replace(cleanupPattern, () =>
+    remoteBootstrapPrefixSource({
+      controlDirectoryVariable,
+      forwardedAgentSetupVariable,
+      forwardedAgentSocketVariable,
+      logPathVariable,
+    }),
+  );
 
   const readinessPattern = /,` >\$\{([A-Za-z_$][\w$]*)\} 2>&1 &`/g;
   const readinessMatches = Array.from(patched.matchAll(readinessPattern));

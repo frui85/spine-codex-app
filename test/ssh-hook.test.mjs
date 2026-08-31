@@ -176,23 +176,22 @@ const remoteSelectorSource =
   "function Fae(e){return/[\\\\/]/.test(e)||/^[a-zA-Z]:/.test(e)}" +
   "function Iae(){let e=Pae();return e==null||Fae(e)?null:e}" +
   "function $S(){return Iae()??Aae}";
-const remoteBootstrapSource =
+const currentRemoteBootstrapSource =
   "function quote(e){return e}" +
-  "let logPath=\"/tmp/app-server.log\";" +
-  "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
-  "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
-  "` || true) && nohup `,`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
-const forwardedAgentBootstrapSource =
-  "function quote(e){return e}" +
-  "let logPath=\"/tmp/app-server.log\"," +
-  "agentSocket=\"/tmp/forwarded-ssh-agent.sock\"," +
+  "let controlDirectory='\"/tmp/app-server-control\"'," +
+  "logPath='\"/tmp/app-server.log\"'," +
+  "agentSocket='\"/tmp/forwarded-ssh-agent.sock\"'," +
   "prepareAgent=\"prepare-forwarded-agent\";" +
-  "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
+  "let command=['if [ \"${CODEX_SSH_SKIP_APP_SERVER_BOOT:-}\" = \"true\" ]; " +
+  "then exit 0; fi; '," +
+  "`(umask 077; mkdir -p -- `,controlDirectory," +
+  "` && (pkill -9 -U \"$(id -u)\" -f `," +
   "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
-  "` || true) && `,prepareAgent,` && SSH_AUTH_SOCK=`,agentSocket,` nohup `," +
+  "` || true) && `,prepareAgent,` && : >`,logPath," +
+  "`) && SSH_AUTH_SOCK=`,agentSocket,` nohup `," +
   "`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
 const patchedRemoteBootstrap = hook.patchRemoteBootstrapCleanupSource(
-  remoteBootstrapSource,
+  currentRemoteBootstrapSource,
 );
 assert.match(
   patchedRemoteBootstrap,
@@ -210,9 +209,20 @@ const renderedRemoteBootstrap = new Function(
 )("spine-codex");
 assert.match(
   renderedRemoteBootstrap,
-  /nohup sh -c 'exec "\$@" <\/dev\/null' sh spine-codex >\/tmp\/app-server\.log 2>&1 &/,
+  /^if \[ "\$\{CODEX_SSH_SKIP_APP_SERVER_BOOT:-\}" = "true" \]; then exit 0; fi; control_dir="\/tmp\/app-server-control";/,
 );
-assert.doesNotMatch(renderedRemoteBootstrap, /&& nohup/);
+assert.match(
+  renderedRemoteBootstrap,
+  /\(umask 077; mkdir -p -- "\$control_dir" && : >"\/tmp\/app-server\.log"\) \|\| exit \$\?;/,
+);
+assert.match(
+  renderedRemoteBootstrap,
+  /prepare-forwarded-agent && SSH_AUTH_SOCK="\/tmp\/forwarded-ssh-agent\.sock" nohup sh -c/,
+);
+assert.match(
+  renderedRemoteBootstrap,
+  /nohup sh -c 'exec "\$@" <\/dev\/null' sh spine-codex >"\/tmp\/app-server\.log" 2>&1 &/,
+);
 assert.equal(
   spawnSync("/bin/sh", ["-n", "-c", renderedRemoteBootstrap]).status,
   0,
@@ -231,25 +241,6 @@ assert.match(
 );
 assert.doesNotMatch(patchedRemoteBootstrap, /\[a\]pp-server --listen/);
 assert.doesNotMatch(patchedRemoteBootstrap, /pkill -9 -U/);
-const patchedForwardedAgentBootstrap =
-  hook.patchRemoteBootstrapCleanupSource(forwardedAgentBootstrapSource);
-const renderedForwardedAgentBootstrap = new Function(
-  "cli",
-  `${patchedForwardedAgentBootstrap}; return command;`,
-)("spine-codex");
-assert.match(
-  renderedForwardedAgentBootstrap,
-  /prepare-forwarded-agent && SSH_AUTH_SOCK=\/tmp\/forwarded-ssh-agent\.sock nohup sh -c/,
-);
-assert.match(
-  renderedForwardedAgentBootstrap,
-  /nohup sh -c 'exec "\$@" <\/dev\/null' sh spine-codex/,
-);
-assert.doesNotMatch(renderedForwardedAgentBootstrap, /pkill -9 -U/);
-assert.equal(
-  spawnSync("/bin/sh", ["-n", "-c", renderedForwardedAgentBootstrap]).status,
-  0,
-);
 assert.throws(
   () => hook.patchRemoteBootstrapCleanupSource("const unrelated = true;"),
   /unsupported structure/,
@@ -279,7 +270,7 @@ assert.equal(
 for (const filename of ["main-dcXtv3U5.js", "main--A7m_SpR.js"]) {
   const candidate = hook.patchMainBundleCandidateSource(
     `/app/.vite/build/${filename}`,
-    remoteSelectorSource + remoteBootstrapSource,
+    remoteSelectorSource + currentRemoteBootstrapSource,
   );
   assert.match(candidate, /app-server-control\.sock/);
 }
@@ -450,7 +441,7 @@ try {
   await writeFile(
     fixtureMain,
     "let fallback=`codex`;" + remoteSelectorSource.replace("Aae", "fallback") +
-      remoteBootstrapSource +
+      currentRemoteBootstrapSource +
       "let version=require(`./chunk-bridge.js`);" +
       "module.exports={cli:$S(),check:version.check};",
     "utf8",

@@ -93,6 +93,138 @@ const source = fs.readFileSync(
   new URL("../spine-view.js", import.meta.url),
   "utf8",
 );
+
+async function checkDelayedThreadMount() {
+  const observers = [];
+  const windowListeners = new Map();
+  const documentListeners = new Map();
+  const delayedThreadId = "00000000-0000-0000-0000-000000000077";
+  let mounted = false;
+  let nextFrame = 0;
+
+  class TestMutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.observations = [];
+      this.disconnected = false;
+      observers.push(this);
+    }
+
+    observe(target, options) {
+      this.observations.push({ target, options });
+    }
+
+    disconnect() {
+      this.disconnected = true;
+    }
+  }
+
+  const body = {};
+  const sidebarRoot = {
+    parentElement: body,
+    getBoundingClientRect: () => ({ width: 300 }),
+    querySelectorAll: (selector) =>
+      selector === "[data-app-action-sidebar-thread-id]" ? [sidebarItem] : [],
+  };
+  const sidebarItem = {
+    parentElement: sidebarRoot,
+    getAttribute(name) {
+      if (name === "data-app-action-sidebar-thread-id") {
+        return `local:${delayedThreadId}`;
+      }
+      return name === "aria-current" ? "page" : null;
+    },
+    classList: { contains: () => false },
+  };
+  const annotation = {
+    getAttribute: (name) =>
+      name === "data-response-annotation-conversation" ? delayedThreadId : null,
+  };
+  const mainThread = {
+    querySelector: (selector) =>
+      selector === "[data-response-annotation-conversation]" ? annotation : null,
+  };
+  const documentElement = {
+    lang: "en",
+    clientWidth: 1200,
+    clientHeight: 800,
+    getAttribute: (name) => name === "lang" ? "en" : null,
+  };
+  const storage = new Map([["spine-codex.view.expanded", "false"]]);
+  const sandbox = {
+    console,
+    MutationObserver: TestMutationObserver,
+    Node: { ELEMENT_NODE: 1 },
+    navigator: { language: "en" },
+    location: { pathname: "/", hash: "" },
+    history: { pushState() {}, replaceState() {} },
+    innerWidth: 1200,
+    innerHeight: 800,
+    localStorage: {
+      getItem: (key) => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, String(value)),
+      removeItem: (key) => storage.delete(key),
+    },
+    document: {
+      body,
+      documentElement,
+      querySelector(selector) {
+        if (!mounted) return null;
+        if (selector === "[data-app-action-sidebar-thread-id]") return sidebarItem;
+        if (selector === '[data-pip-anchor-host="codex-main-thread"]') return mainThread;
+        return null;
+      },
+      querySelectorAll(selector) {
+        return mounted && selector === "[data-app-action-sidebar-thread-id]"
+          ? [sidebarItem]
+          : [];
+      },
+      addEventListener: (type, listener) => documentListeners.set(type, listener),
+      removeEventListener: (type) => documentListeners.delete(type),
+    },
+    addEventListener: (type, listener) => windowListeners.set(type, listener),
+    removeEventListener: (type) => windowListeners.delete(type),
+    requestAnimationFrame: () => ++nextFrame,
+    cancelAnimationFrame() {},
+    queueMicrotask,
+    setTimeout,
+    clearTimeout,
+  };
+  sandbox.window = sandbox;
+  const context = vm.createContext(sandbox);
+  vm.runInContext(source, context, { filename: "spine_view_delayed_mount.js" });
+
+  const delayedApi = sandbox.__spineCodexViewV1;
+  assert.equal(delayedApi.getStats().activeThreadId, null);
+  const startupObserver = observers.find((observer) =>
+    observer.observations.some(({ target, options }) =>
+      target === body && options.subtree && options.childList && !options.attributes));
+  assert.ok(startupObserver);
+  assert.equal(startupObserver.disconnected, false);
+
+  mounted = true;
+  startupObserver.callback([{ type: "childList", target: body }]);
+  await Promise.resolve();
+  assert.equal(delayedApi.getStats().activeThreadId, delayedThreadId);
+  assert.equal(
+    observers.some((observer) =>
+      observer.observations.some(({ target }) => target === sidebarRoot)),
+    true,
+  );
+  assert.equal(
+    observers.some((observer) =>
+      observer.observations.some(({ target }) => target === mainThread)),
+    true,
+  );
+  assert.equal(startupObserver.disconnected, true);
+
+  mounted = false;
+  delayedApi.sync();
+  assert.equal(delayedApi.getStats().activeThreadId, delayedThreadId);
+  delayedApi.destroy();
+}
+
+await checkDelayedThreadMount();
 assert.match(source, /data-pip-obstacle="thread-summary-panel"/);
 assert.doesNotMatch(source, /hasSummarySections/);
 assert.doesNotMatch(
@@ -108,7 +240,7 @@ vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
 assert.equal(api.version, "0.2.2.4");
-assert.equal(api.revision, 10);
+assert.equal(api.revision, 11);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -1009,7 +1141,7 @@ api.destroy();
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
 assert.equal(restoredApi.version, "0.2.2.4");
-assert.equal(restoredApi.revision, 10);
+assert.equal(restoredApi.revision, 11);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&
@@ -1042,5 +1174,5 @@ assert.equal(storage.has("spine-codex.view.thread-aliases"), false);
 restoredApi.destroy();
 
 console.log(
-  "spine_view.js sequence, projection, interrupted Spawn intent persistence, spawn navigation and detail-title naming, settings integration contract, long-tree persistence, click switching, TTL, and clear-cache checks passed",
+  "spine_view.js delayed thread mount, transient identity gap, sequence, projection, interrupted Spawn intent persistence, spawn navigation and detail-title naming, settings integration contract, long-tree persistence, click switching, TTL, and clear-cache checks passed",
 );

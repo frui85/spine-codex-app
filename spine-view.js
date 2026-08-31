@@ -30,7 +30,7 @@
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
   const VERSION = "0.2.2.4";
-  const RENDERER_REVISION = 10;
+  const RENDERER_REVISION = 11;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -1041,6 +1041,9 @@
     sidebarRoot: null,
     threadObserver: null,
     threadRoot: null,
+    startupThreadObserver: null,
+    startupThreadTimer: 0,
+    startupThreadSyncQueued: false,
     panelObserver: null,
     panelRoot: null,
     summarySurfaceObserver: null,
@@ -5677,8 +5680,13 @@
   function handleThreadSelection() {
     connectSidebarObserver();
     connectThreadObserver();
-    activateThread(selectedThreadId());
+    const threadId = selectedThreadId();
+    // React can temporarily remove both identity surfaces while replacing the
+    // current thread DOM. Keep the last confirmed thread until a new identity
+    // appears; explicit sidebar clicks still clear it for real new-thread rows.
+    if (threadId || !state.activeThreadId) activateThread(threadId);
     ensureMounted(24);
+    return threadId;
   }
 
   function findSidebarRoot() {
@@ -5709,7 +5717,11 @@
       subtree: true,
       childList: true,
       attributes: true,
-      attributeFilter: ["class", "data-app-action-sidebar-thread-id"],
+      attributeFilter: [
+        "aria-current",
+        "class",
+        "data-app-action-sidebar-thread-id",
+      ],
     });
   }
 
@@ -5744,6 +5756,56 @@
     });
   }
 
+  function stopStartupThreadSync() {
+    state.startupThreadObserver?.disconnect();
+    state.startupThreadObserver = null;
+    if (state.startupThreadTimer) clearTimeout(state.startupThreadTimer);
+    state.startupThreadTimer = 0;
+    state.startupThreadSyncQueued = false;
+  }
+
+  function startupThreadSyncReady() {
+    return Boolean(
+      state.activeThreadId &&
+      state.sidebarRoot &&
+      state.threadRoot
+    );
+  }
+
+  function runStartupThreadSync() {
+    state.startupThreadSyncQueued = false;
+    if (state.destroyed) {
+      stopStartupThreadSync();
+      return;
+    }
+    handleThreadSelection();
+    if (startupThreadSyncReady()) stopStartupThreadSync();
+  }
+
+  function queueStartupThreadSync() {
+    if (state.startupThreadSyncQueued || state.destroyed) return;
+    state.startupThreadSyncQueued = true;
+    queueMicrotask(runStartupThreadSync);
+  }
+
+  function startStartupThreadSync() {
+    runStartupThreadSync();
+    if (
+      startupThreadSyncReady() ||
+      !document.body ||
+      typeof MutationObserver !== "function"
+    ) {
+      return;
+    }
+    stopStartupThreadSync();
+    state.startupThreadObserver = new MutationObserver(queueStartupThreadSync);
+    state.startupThreadObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+    });
+    state.startupThreadTimer = setTimeout(stopStartupThreadSync, 15_000);
+  }
+
   function onResize() {
     if (
       state.ui?.host.isConnected &&
@@ -5760,9 +5822,7 @@
     connectLocaleObserver();
     window.addEventListener("languagechange", onLanguageChange);
     void syncLocaleSetting();
-    state.activeThreadId = selectedThreadId();
-    connectSidebarObserver();
-    connectThreadObserver();
+    startStartupThreadSync();
     connectSummarySurfaceObserver();
     loadHostCatalog();
     scheduleMount(60);
@@ -5912,6 +5972,7 @@
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("languagechange", onLanguageChange);
       document.removeEventListener("click", onSidebarClick, true);
+      stopStartupThreadSync();
       state.sidebarObserver?.disconnect();
       state.threadObserver?.disconnect();
       state.panelObserver?.disconnect();
