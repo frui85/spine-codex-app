@@ -4,6 +4,21 @@
 
 ## Unreleased
 
+## v0.3.3.1 — 2026-08-31
+
+App-only durability recovery update validated against the unchanged official
+`@spinejit/spine-codex@0.3.3` baseline.
+
+- Recovers the exact context-plan failure caused when SpineCodex accepts a
+  `spine.close` or `spine.next` memory whose projected fragment exceeds 8,000
+  UTF-8 bytes.
+- Validates the source rollout, matching tool call, accepted output, and
+  reported fragment size before cloning history into a replacement thread.
+- Truncates only the cloned memory at a UTF-8 boundary within the observed
+  projection budget; the original session and installed CLI remain unchanged.
+- Handles both the first context-plan fatal and its durability-faulted wrapper,
+  while unrelated and boundary-size failures remain fail closed.
+
 ## v0.3.3.0 — 2026-08-25
 
 Compatibility and recovery release validated against SpineCodex 0.3.3 while

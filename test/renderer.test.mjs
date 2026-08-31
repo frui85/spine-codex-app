@@ -104,6 +104,144 @@ const source = fs.readFileSync(
   new URL("../spine-view.js", import.meta.url),
   "utf8",
 );
+
+async function checkDelayedThreadMount() {
+  const observers = [];
+  const delayedWindowListeners = new Map();
+  const delayedDocumentListeners = new Map();
+  const delayedThreadId = "00000000-0000-0000-0000-000000000077";
+  let mounted = false;
+  let delayedFrame = 0;
+
+  class TestMutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.observations = [];
+      this.disconnected = false;
+      observers.push(this);
+    }
+
+    observe(target, options) {
+      this.observations.push({ target, options });
+    }
+
+    disconnect() {
+      this.disconnected = true;
+    }
+  }
+
+  const body = {};
+  const sidebarRoot = {
+    parentElement: body,
+    getBoundingClientRect: () => ({ width: 300 }),
+    querySelectorAll: (selector) =>
+      selector === "[data-app-action-sidebar-thread-id]" ? [sidebarItem] : [],
+  };
+  const sidebarItem = {
+    parentElement: sidebarRoot,
+    getAttribute(name) {
+      if (name === "data-app-action-sidebar-thread-id") {
+        return `local:${delayedThreadId}`;
+      }
+      return name === "aria-current" ? "page" : null;
+    },
+    classList: { contains: () => false },
+  };
+  const delayedAnnotation = {
+    getAttribute: (name) =>
+      name === "data-response-annotation-conversation" ? delayedThreadId : null,
+  };
+  const delayedMainThread = {
+    querySelector: (selector) =>
+      selector === "[data-response-annotation-conversation]"
+        ? delayedAnnotation
+        : null,
+  };
+  const delayedStorage = new Map([["spine-codex.view.expanded", "false"]]);
+  const sandbox = {
+    console,
+    electronBridge: { sendMessageFromView: () => Promise.resolve() },
+    MutationObserver: TestMutationObserver,
+    Node: { ELEMENT_NODE: 1 },
+    navigator: { language: "en" },
+    location: { pathname: "/", hash: "" },
+    history: { pushState() {}, replaceState() {} },
+    innerWidth: 1200,
+    innerHeight: 800,
+    localStorage: {
+      getItem: (key) => delayedStorage.get(key) ?? null,
+      setItem: (key, value) => delayedStorage.set(key, String(value)),
+      removeItem: (key) => delayedStorage.delete(key),
+    },
+    document: {
+      body,
+      documentElement: {
+        lang: "en",
+        clientWidth: 1200,
+        clientHeight: 800,
+        getAttribute: (name) => name === "lang" ? "en" : null,
+      },
+      querySelector(selector) {
+        if (!mounted) return null;
+        if (selector === "[data-app-action-sidebar-thread-id]") return sidebarItem;
+        if (selector === '[data-pip-anchor-host="codex-main-thread"]') {
+          return delayedMainThread;
+        }
+        return null;
+      },
+      querySelectorAll(selector) {
+        return mounted && selector === "[data-app-action-sidebar-thread-id]"
+          ? [sidebarItem]
+          : [];
+      },
+      addEventListener: (type, listener) => delayedDocumentListeners.set(type, listener),
+      removeEventListener: (type) => delayedDocumentListeners.delete(type),
+    },
+    addEventListener: (type, listener) => delayedWindowListeners.set(type, listener),
+    removeEventListener: (type) => delayedWindowListeners.delete(type),
+    postMessage: (data) => queueMicrotask(() =>
+      delayedWindowListeners.get("message")?.({ data })),
+    requestAnimationFrame: () => ++delayedFrame,
+    cancelAnimationFrame() {},
+    queueMicrotask,
+    setTimeout,
+    clearTimeout,
+  };
+  sandbox.window = sandbox;
+  const context = vm.createContext(sandbox);
+  vm.runInContext(source, context, { filename: "spine_view_delayed_mount.js" });
+
+  const delayedApi = sandbox.__spineCodexViewV1;
+  assert.equal(delayedApi.getStats().activeThreadId, null);
+  const startupObserver = observers.find((observer) =>
+    observer.observations.some(({ target, options }) =>
+      target === body && options.subtree && options.childList && !options.attributes));
+  assert.ok(startupObserver);
+  assert.equal(startupObserver.disconnected, false);
+
+  mounted = true;
+  startupObserver.callback([{ type: "childList", target: body }]);
+  await Promise.resolve();
+  assert.equal(delayedApi.getStats().activeThreadId, delayedThreadId);
+  assert.equal(
+    observers.some((observer) =>
+      observer.observations.some(({ target }) => target === sidebarRoot)),
+    true,
+  );
+  assert.equal(
+    observers.some((observer) =>
+      observer.observations.some(({ target }) => target === delayedMainThread)),
+    true,
+  );
+  assert.equal(startupObserver.disconnected, true);
+
+  mounted = false;
+  delayedApi.sync();
+  assert.equal(delayedApi.getStats().activeThreadId, delayedThreadId);
+  delayedApi.destroy();
+}
+
+await checkDelayedThreadMount();
 const contractRoot = new URL("./fixtures/spine-codex-0.3.3/", import.meta.url);
 const contractManifest = JSON.parse(fs.readFileSync(
   new URL("manifest.json", contractRoot),
@@ -140,8 +278,8 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.3.3.0");
-assert.equal(api.revision, 11);
+assert.equal(api.version, "0.3.3.1");
+assert.equal(api.revision, 12);
 
 const recoveredThreadId = "00000000-0000-0000-0000-000000000099";
 const resumeRequest = {
@@ -195,6 +333,128 @@ assert.equal(
   JSON.parse(storage.get("spine-codex.view.replay-aliases.v1")).entries[0].target,
   recoveredThreadId,
 );
+
+const overflowThreadId = "00000000-0000-0000-0000-000000000002";
+const overflowRecoveredThreadId = "00000000-0000-0000-0000-000000000098";
+const overflowResumeRequest = {
+  type: "mcp-request",
+  hostId: "local",
+  request: {
+    jsonrpc: "2.0",
+    id: "resume-overflow-1",
+    method: "thread/resume",
+    params: { threadId: overflowThreadId, history: null },
+  },
+};
+windowListeners.get("codex-message-from-view")({ detail: overflowResumeRequest });
+let overflowStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-1",
+      error: {
+        message:
+          "Fatal error: Spine context plan failed: " +
+          "Spine memory fragment is 9005 bytes; maximum is 8000",
+      },
+    },
+  },
+  stopImmediatePropagation() { overflowStopped = true; },
+});
+assert.equal(overflowStopped, true);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-recover");
+assert.equal(bridgeMessages.at(-1).request.params.threadId, overflowThreadId);
+
+const overflowStatusNotification = {
+  type: "mcp-notification",
+  method: "thread/status/changed",
+  params: { threadId: overflowRecoveredThreadId, status: { type: "idle" } },
+};
+windowListeners.get("message")({ data: overflowStatusNotification });
+assert.equal(overflowStatusNotification.params.threadId, overflowThreadId);
+assert.deepEqual(bridgeMessages.at(-1).aliases, [
+  [canonicalThreadId, recoveredThreadId],
+  [overflowThreadId, overflowRecoveredThreadId],
+]);
+const overflowRecoveryResponse = {
+  type: "mcp-response",
+  message: {
+    id: "resume-overflow-1",
+    result: { thread: { id: overflowRecoveredThreadId } },
+  },
+};
+windowListeners.get("message")({ data: overflowRecoveryResponse });
+assert.equal(overflowRecoveryResponse.message.result.thread.id, overflowThreadId);
+
+const wrappedOverflowThreadId = "00000000-0000-0000-0000-000000000003";
+windowListeners.get("codex-message-from-view")({
+  detail: {
+    ...overflowResumeRequest,
+    request: {
+      ...overflowResumeRequest.request,
+      id: "resume-overflow-wrapped",
+      params: { threadId: wrappedOverflowThreadId, history: null },
+    },
+  },
+});
+let wrappedOverflowStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-wrapped",
+      error: {
+        message:
+          "Fatal error: Spine durability is faulted: Spine context plan failed: " +
+          "Spine memory fragment is 9005 bytes; maximum is 8000",
+      },
+    },
+  },
+  stopImmediatePropagation() { wrappedOverflowStopped = true; },
+});
+assert.equal(wrappedOverflowStopped, true);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-recover");
+assert.equal(bridgeMessages.at(-1).request.params.threadId, wrappedOverflowThreadId);
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-wrapped",
+      error: { message: "synthetic recovery failure" },
+    },
+  },
+});
+
+const boundaryThreadId = "00000000-0000-0000-0000-000000000004";
+windowListeners.get("codex-message-from-view")({
+  detail: {
+    ...overflowResumeRequest,
+    request: {
+      ...overflowResumeRequest.request,
+      id: "resume-overflow-boundary",
+      params: { threadId: boundaryThreadId, history: null },
+    },
+  },
+});
+const bridgeMessageCount = bridgeMessages.length;
+let boundaryStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-boundary",
+      error: {
+        message:
+          "Fatal error: Spine context plan failed: " +
+          "Spine memory fragment is 8000 bytes; maximum is 8000",
+      },
+    },
+  },
+  stopImmediatePropagation() { boundaryStopped = true; },
+});
+assert.equal(boundaryStopped, false);
+assert.equal(bridgeMessages.length, bridgeMessageCount);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -1138,13 +1398,13 @@ assert.deepEqual(api.getStats(), {
   subagentLabelSyncPending: false,
   subagentListObserved: false,
   subagentTitleHookPending: false,
-  replayRecoveryAliases: 1,
+  replayRecoveryAliases: 2,
   replayRecoveryPending: 0,
   replayRecoveryInFlight: 0,
   lastReplayRecovery: {
-    status: "recovered",
-    threadId: canonicalThreadId,
-    actualThreadId: recoveredThreadId,
+    status: "failed",
+    threadId: wrappedOverflowThreadId,
+    message: "synthetic recovery failure",
   },
 });
 assert.equal(windowListeners.has("message"), true);
@@ -1213,8 +1473,8 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.3.3.0");
-assert.equal(restoredApi.revision, 11);
+assert.equal(restoredApi.version, "0.3.3.1");
+assert.equal(restoredApi.revision, 12);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&
@@ -1250,5 +1510,5 @@ assert.deepEqual(bridgeMessages.at(-1).aliases, []);
 restoredApi.destroy();
 
 console.log(
-  "spine_view.js sequence, projection, interrupted Spawn intent persistence, spawn navigation and detail-title naming, settings integration contract, long-tree persistence, click switching, TTL, and clear-cache checks passed",
+  "spine_view.js delayed thread mount, transient identity gap, sequence, projection, interrupted Spawn intent persistence, spawn navigation and detail-title naming, settings integration contract, long-tree persistence, click switching, TTL, and clear-cache checks passed",
 );

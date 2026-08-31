@@ -15,7 +15,7 @@ const disabledWindowsWorkflow = await readFile(
   "utf8",
 );
 const releaseNotes = await readFile(
-  new URL("docs/RELEASE_NOTES_v0.3.3.0.md", root),
+  new URL("docs/RELEASE_NOTES_v0.3.3.1.md", root),
   "utf8",
 );
 const validator = fileURLToPath(
@@ -29,13 +29,13 @@ function validate(tag) {
 }
 
 test("release tag must match the wrapper source version", () => {
-  const accepted = validate("v0.3.3.0");
+  const accepted = validate("v0.3.3.1");
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(accepted.stdout.trim(), "0.3.3.0");
+  assert.equal(accepted.stdout.trim(), "0.3.3.1");
 
   const rejected = validate("v0.3.3");
   assert.notEqual(rejected.status, 0);
-  assert.match(rejected.stderr, /does not match source version v0\.3\.3\.0/);
+  assert.match(rejected.stderr, /does not match source version v0\.3\.3\.1/);
 });
 
 test("active release workflow is tag-driven and publishes macOS only", () => {
@@ -47,19 +47,19 @@ test("active release workflow is tag-driven and publishes macOS only", () => {
   assert.match(releaseWorkflow, /gh release create .*--draft/);
   assert.match(releaseWorkflow, /gh release edit[\s\S]*--draft=false --latest/);
   assert.doesNotMatch(releaseWorkflow, /build-windows-release|windows-x64/);
-  assert.match(releaseNotes, /^# SpineCodex App v0\.3\.3\.0/m);
+  assert.match(releaseNotes, /^# SpineCodex App v0\.3\.3\.1/m);
   assert.match(releaseNotes, /SpineCodex recommended baseline \| 0\.3\.3/);
 });
 
 test("release notes use a tag-pinned absolute Chinese link", () => {
   const rendered = renderReleaseNotes(releaseNotes, {
     repository: "frui85/spine-codex-app",
-    ref: "v0.3.3.0",
-    version: "0.3.3.0",
+    ref: "v0.3.3.1",
+    version: "0.3.3.1",
   });
   assert.match(
     rendered,
-    /\[中文发布说明\]\(https:\/\/github\.com\/frui85\/spine-codex-app\/blob\/v0\.3\.3\.0\/docs\/RELEASE_NOTES_v0\.3\.3\.0_ZH\.md\)/,
+    /\[中文发布说明\]\(https:\/\/github\.com\/frui85\/spine-codex-app\/blob\/v0\.3\.3\.1\/docs\/RELEASE_NOTES_v0\.3\.3\.1_ZH\.md\)/,
   );
   assert.doesNotMatch(rendered, /\[中文发布说明\]\(RELEASE_NOTES_/);
 });
@@ -68,8 +68,8 @@ test("release-note rendering fails closed when the expected link drifts", () => 
   assert.throws(
     () => renderReleaseNotes("# Notes\n", {
       repository: "frui85/spine-codex-app",
-      ref: "v0.3.3.0",
-      version: "0.3.3.0",
+      ref: "v0.3.3.1",
+      version: "0.3.3.1",
     }),
     /expected exactly one Chinese release-notes link/,
   );

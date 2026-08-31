@@ -33,6 +33,13 @@ const REPLAY_ALIAS_SYNC_MESSAGE = "spine-thread-replay-aliases-sync";
 const THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DURABILITY_REPLAY_MISMATCH_PATTERN =
   /Spine durability is faulted:\s*Spine replay failed:\s*sampling commit does not match its sampling-started record/;
+const SPINE_MEMORY_OVERFLOW_PATTERN =
+  /^(?:Fatal error:\s*)?(?:Spine durability is faulted:\s*)?Spine context plan failed:\s*Spine memory fragment is ([1-9]\d*) bytes; maximum is 8000$/;
+const MAX_SPINE_MEMORY_FRAGMENT_BYTES = 8_000;
+const MIN_SPINE_MEMORY_WRAPPER_BYTES = 40;
+const MAX_SPINE_MEMORY_WRAPPER_BYTES = 1_024;
+const MEMORY_RECOVERY_SUFFIX =
+  "\n\n[SpineCodex App: memory shortened to fit SpineCodex 0.3.3's 8000-byte context limit.]";
 const MAX_RECOVERY_HISTORY_ITEMS = 5_000;
 const MAX_RECOVERY_HISTORY_BYTES = 64 * 1024 * 1024;
 const VERSION_CHECK_PATTERN =
@@ -482,6 +489,27 @@ function isDurabilityReplayMismatch(value) {
   return DURABILITY_REPLAY_MISMATCH_PATTERN.test(String(value ?? ""));
 }
 
+function parseSpineMemoryOverflow(value) {
+  const match = String(value ?? "").trim().match(SPINE_MEMORY_OVERFLOW_PATTERN);
+  if (!match) return null;
+  const fragmentBytes = Number(match[1]);
+  if (
+    !Number.isSafeInteger(fragmentBytes) ||
+    fragmentBytes <= MAX_SPINE_MEMORY_FRAGMENT_BYTES
+  ) return null;
+  return Object.freeze({ fragmentBytes });
+}
+
+function replayRecoveryKind(value) {
+  if (isDurabilityReplayMismatch(value)) return "inherited-replay";
+  if (parseSpineMemoryOverflow(value)) return "memory-overflow";
+  return null;
+}
+
+function isRecoverableSpineFailure(value) {
+  return replayRecoveryKind(value) != null;
+}
+
 function isThreadId(value) {
   return THREAD_ID_PATTERN.test(String(value ?? ""));
 }
@@ -642,6 +670,219 @@ async function recoverInheritedReplayHistory(threadId, options = {}) {
   return Object.freeze({ ...recovered, rolloutPath, parentRolloutPath });
 }
 
+function spineMemoryTransition(item) {
+  if (item?.type !== "function_call") return null;
+  const qualifiedName = item.namespace
+    ? `${item.namespace}.${item.name}`
+    : item.name;
+  if (qualifiedName !== "spine.close" && qualifiedName !== "spine.next") {
+    return null;
+  }
+  let arguments_;
+  try {
+    arguments_ = JSON.parse(item.arguments);
+  } catch {
+    return null;
+  }
+  if (
+    !arguments_ ||
+    typeof arguments_ !== "object" ||
+    Array.isArray(arguments_) ||
+    typeof arguments_.memory !== "string" ||
+    !arguments_.memory.trim() ||
+    typeof item.call_id !== "string" ||
+    !item.call_id
+  ) return null;
+  return {
+    arguments_,
+    callId: item.call_id,
+    memoryBytes: Buffer.byteLength(arguments_.memory),
+    output: qualifiedName === "spine.close"
+      ? "Spine close accepted."
+      : "Spine next accepted.",
+  };
+}
+
+function truncateUtf8WithSuffix(value, maxBytes, suffix = MEMORY_RECOVERY_SUFFIX) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("Spine memory recovery received an invalid byte budget");
+  }
+  if (Buffer.byteLength(value) <= maxBytes) return value;
+  const suffixBytes = Buffer.byteLength(suffix);
+  if (suffixBytes >= maxBytes) {
+    throw new Error("Spine memory recovery byte budget cannot fit its marker");
+  }
+  const prefixBudget = maxBytes - suffixBytes;
+  let prefix = "";
+  let prefixBytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character);
+    if (prefixBytes + characterBytes > prefixBudget) break;
+    prefix += character;
+    prefixBytes += characterBytes;
+  }
+  return prefix + suffix;
+}
+
+async function readMemoryOverflowReplayHistory(
+  rolloutPath,
+  threadId,
+  errorMessage,
+) {
+  const requestedOverflow = parseSpineMemoryOverflow(errorMessage);
+  if (!requestedOverflow) {
+    throw new Error("Spine memory recovery requires the guarded 8000-byte overflow error");
+  }
+  const stream = fs.createReadStream(rolloutPath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lineNumber = 0;
+  let firstSessionMeta = null;
+  let history = [];
+  let hasHistory = false;
+  let candidate = null;
+  let acceptedCandidate = null;
+  let matchedFailure = false;
+  let unsupportedTailReason = null;
+
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (!line.trim()) continue;
+      let item;
+      try {
+        item = JSON.parse(line);
+      } catch {
+        throw new Error(`Spine memory recovery found malformed JSONL at line ${lineNumber}`);
+      }
+      if (item.type === "session_meta" && firstSessionMeta == null) {
+        firstSessionMeta = item.payload;
+        continue;
+      }
+      if (item.type === "compacted") {
+        if (!Array.isArray(item.payload?.replacement_history)) {
+          throw new Error(
+            "Spine memory recovery cannot safely materialize a compact without replacement history",
+          );
+        }
+        history = item.payload.replacement_history.map((entry) => structuredClone(entry));
+        hasHistory = true;
+        candidate = null;
+        acceptedCandidate = null;
+        matchedFailure = false;
+        unsupportedTailReason = null;
+        continue;
+      }
+      if (item.type === "response_item") {
+        const cloned = structuredClone(item.payload);
+        history.push(cloned);
+        hasHistory = true;
+        const transition = spineMemoryTransition(cloned);
+        if (transition) {
+          const wrapperBytes =
+            requestedOverflow.fragmentBytes - transition.memoryBytes;
+          candidate =
+            wrapperBytes >= MIN_SPINE_MEMORY_WRAPPER_BYTES &&
+            wrapperBytes <= MAX_SPINE_MEMORY_WRAPPER_BYTES
+              ? { ...transition, historyIndex: history.length - 1, wrapperBytes }
+              : null;
+          acceptedCandidate = null;
+          matchedFailure = false;
+        } else if (
+          candidate &&
+          cloned?.type === "function_call_output" &&
+          cloned.call_id === candidate.callId &&
+          cloned.output === candidate.output
+        ) {
+          acceptedCandidate = candidate;
+        }
+        continue;
+      }
+      if (item.type === "inter_agent_communication") {
+        unsupportedTailReason = "inter-agent communication after the latest compact";
+        continue;
+      }
+      if (
+        item.type === "event_msg" &&
+        item.payload?.type === "thread_rolled_back"
+      ) {
+        unsupportedTailReason = "a rollback after the latest compact";
+        continue;
+      }
+      if (item.type === "event_msg" && item.payload?.type === "task_complete") {
+        const recordedOverflow = parseSpineMemoryOverflow(item.payload?.error?.message);
+        if (
+          acceptedCandidate &&
+          recordedOverflow?.fragmentBytes === requestedOverflow.fragmentBytes
+        ) {
+          matchedFailure = true;
+        }
+      }
+    }
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+
+  if (firstSessionMeta?.id !== threadId) {
+    throw new Error("Spine memory recovery rollout identity does not match the requested thread");
+  }
+  if (!hasHistory || history.length === 0) {
+    throw new Error("Spine memory recovery found no effective response history");
+  }
+  if (!acceptedCandidate || !matchedFailure) {
+    throw new Error("Spine memory recovery did not find the accepted overflowing transition");
+  }
+  if (unsupportedTailReason != null) {
+    throw new Error(`Spine memory recovery cannot safely handle ${unsupportedTailReason}`);
+  }
+  const memoryBudget =
+    MAX_SPINE_MEMORY_FRAGMENT_BYTES - acceptedCandidate.wrapperBytes;
+  if (memoryBudget <= 0 || memoryBudget >= acceptedCandidate.memoryBytes) {
+    throw new Error("Spine memory recovery could not derive a safe memory byte budget");
+  }
+  const transitionItem = history[acceptedCandidate.historyIndex];
+  const transition = spineMemoryTransition(transitionItem);
+  if (!transition || transition.callId !== acceptedCandidate.callId) {
+    throw new Error("Spine memory recovery transition changed while materializing history");
+  }
+  const repairedMemory = truncateUtf8WithSuffix(
+    transition.arguments_.memory,
+    memoryBudget,
+  );
+  transition.arguments_.memory = repairedMemory;
+  transitionItem.arguments = JSON.stringify(transition.arguments_);
+
+  if (history.length > MAX_RECOVERY_HISTORY_ITEMS) {
+    throw new Error("Spine memory recovery history exceeds the item safety limit");
+  }
+  const historyBytes = Buffer.byteLength(JSON.stringify(history));
+  if (historyBytes > MAX_RECOVERY_HISTORY_BYTES) {
+    throw new Error("Spine memory recovery history exceeds the byte safety limit");
+  }
+  return Object.freeze({
+    history,
+    itemCount: history.length,
+    historyBytes,
+    originalMemoryBytes: acceptedCandidate.memoryBytes,
+    repairedMemoryBytes: Buffer.byteLength(repairedMemory),
+    fragmentBytes: requestedOverflow.fragmentBytes,
+  });
+}
+
+async function recoverMemoryOverflowReplayHistory(
+  threadId,
+  errorMessage,
+  options = {},
+) {
+  const rolloutPath = await findThreadRolloutPath(threadId, options);
+  const recovered = await readMemoryOverflowReplayHistory(
+    rolloutPath,
+    threadId,
+    errorMessage,
+  );
+  return Object.freeze({ ...recovered, rolloutPath });
+}
+
 function installAppServerReplayRecovery(options = {}) {
   const electron = options.electron ?? loadElectronMainApi(options.requireFn);
   const ipcMain = electron?.ipcMain;
@@ -650,6 +891,8 @@ function installAppServerReplayRecovery(options = {}) {
   }
   const channel = options.channel ?? APP_SERVER_VIEW_CHANNEL;
   const recoverHistory = options.recoverHistory ?? recoverInheritedReplayHistory;
+  const recoverMemoryOverflowHistory =
+    options.recoverMemoryOverflowHistory ?? recoverMemoryOverflowReplayHistory;
   const aliases = new Map();
   const originalHandle = ipcMain.handle;
   let disposed = false;
@@ -676,17 +919,20 @@ function installAppServerReplayRecovery(options = {}) {
     if (message?.type === REPLAY_RECOVERY_MESSAGE) {
       const request = message.request;
       const threadId = request?.params?.threadId;
+      const recoveryKind = replayRecoveryKind(message.errorMessage);
       if (
         message.hostId !== "local" ||
         request?.method !== "thread/resume" ||
         request.params?.history != null ||
         !experimentalApiEnabled ||
         !isThreadId(threadId) ||
-        !isDurabilityReplayMismatch(message.errorMessage)
+        recoveryKind == null
       ) {
         throw new Error("Spine replay recovery request is outside the guarded recovery scope");
       }
-      const recovered = await recoverHistory(threadId, options);
+      const recovered = recoveryKind === "memory-overflow"
+        ? await recoverMemoryOverflowHistory(threadId, message.errorMessage, options)
+        : await recoverHistory(threadId, options);
       const retry = {
         ...message,
         type: "mcp-request",
@@ -701,8 +947,8 @@ function installAppServerReplayRecovery(options = {}) {
       };
       delete retry.errorMessage;
       console.warn(
-        `[SpineCodex] retrying inherited Spine lineage ${threadId} with ` +
-          `${recovered.itemCount} effective native history items`,
+        `[SpineCodex] retrying ${recoveryKind} thread ${threadId} with ` +
+          `${recovered.itemCount} effective history items`,
       );
       return handler(event, retry);
     }
@@ -1121,9 +1367,14 @@ module.exports = {
   reloadRendererPayload,
   loadElectronMainApi,
   isDurabilityReplayMismatch,
+  parseSpineMemoryOverflow,
+  isRecoverableSpineFailure,
   findThreadRolloutPath,
   readInheritedReplayHistory,
   recoverInheritedReplayHistory,
+  truncateUtf8WithSuffix,
+  readMemoryOverflowReplayHistory,
+  recoverMemoryOverflowReplayHistory,
   installAppServerReplayRecovery,
   isElectronMainApi,
   captureElectronMainApi,
