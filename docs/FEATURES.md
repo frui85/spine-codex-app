@@ -2,7 +2,7 @@
 
 > [简体中文](FEATURES_ZH.md) · **English**
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.1. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.2. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -33,7 +33,15 @@ binary can be used.
 Quit Codex Desktop completely before launching. The wrapper uses a random
 loopback-only CDP port, validates the renderer WebSocket, registers the
 renderer for the initial target, injects the section, and then exits. The
-verified Electron main hook independently keeps narrow `web-contents-created`
+launcher gives the verified main-process hook 20 seconds to finish. Recognized
+intermediate states can extend the active deadline by 10 seconds while making
+real progress, but a 30-second hard limit prevents an indefinite launch wait.
+The deadline boundary and a final 500 ms grace window both re-read the state so
+a just-completed hook cannot be reported as failed. If initialization still
+times out, the message distinguishes a preload that never reported from a hook
+that loaded but did not finish its asynchronous integrations.
+
+The verified Electron main hook independently keeps narrow `web-contents-created`
 and `did-finish-load` listeners. It SHA-256 verifies `spine-view.js` and then
 re-reads the same absolute resource path for every completed main-surface
 load. It executes the current source only in the exact `app://-/index.html`

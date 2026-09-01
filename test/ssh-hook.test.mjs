@@ -22,12 +22,17 @@ const shimPath = new URL(
   import.meta.url,
 );
 const rendererPath = new URL("../spine-view.js", import.meta.url);
+const mainHookReadinessPath = new URL(
+  "../lib/main-hook-readiness.mjs",
+  import.meta.url,
+);
 
 const hook = require(fileURLToPath(hookPath));
 const hookSource = await readFile(hookPath, "utf8");
 const wrapperSource = await readFile(wrapperPath, "utf8");
 const shimSource = await readFile(shimPath, "utf8");
 const rendererSource = await readFile(rendererPath, "utf8");
+const mainHookReadinessSource = await readFile(mainHookReadinessPath, "utf8");
 
 assert.equal(hook.DEFAULT_MIN_SPINE_VERSION, "0.2.2");
 assert.deepEqual(hook.parseVersion("0.2.2"), [0, 2, 2]);
@@ -342,10 +347,13 @@ assert.match(
   wrapperSource,
   /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
 );
-assert.match(wrapperSource, /rendererRecovery !== true/);
+assert.match(
+  mainHookReadinessSource,
+  /rendererRecovery !== true/,
+);
 assert.match(
   wrapperSource,
-  /waitForMainHookReady\(\s*mainHookStatusPath,\s*process\.platform === "win32" \? 20_000 : 5_000,/,
+  /waitForMainHookReady\(\s*mainHookStatusPath,\s*\{\s*timeoutMs: 20_000,\s*progressGraceMs: 10_000,\s*hardTimeoutMs: 30_000,\s*finalGraceMs: 500,/,
 );
 assert.match(wrapperSource, /--require \$\{JSON\.stringify\(ELECTRON_MAIN_HOOK\)\}/);
 assert.match(wrapperSource, /--require "\$\{ELECTRON_MAIN_HOOK/);

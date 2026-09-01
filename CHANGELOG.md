@@ -4,6 +4,23 @@
 
 ## Unreleased
 
+## v0.3.3.2 — 2026-09-01
+
+App-only startup readiness update validated against the unchanged official
+`@spinejit/spine-codex@0.3.3` baseline.
+
+- Replaces the macOS launcher's fixed five-second main-hook wait with a
+  20-second initial deadline and progress-aware sliding extensions.
+- Recognizes only the hook's known initialization states as progress, retains
+  a 30-second hard limit, and performs bounded final state reads before
+  reporting failure.
+- Distinguishes a preload that never reported from a loaded hook whose
+  asynchronous Renderer or app-server recovery integration did not finish.
+- Adds deterministic virtual-clock coverage for delayed readiness, progress
+  deadlines, hard limits, final grace, malformed state, and fail-closed paths.
+- Validates the bundle and complete startup path on ChatGPT/Codex Desktop
+  `26.825.51511` (build 7377).
+
 ## v0.3.3.1 — 2026-08-31
 
 App-only durability recovery update validated against the unchanged official
