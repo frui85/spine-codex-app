@@ -31,26 +31,31 @@ const mainInspector = await readFile(
   new URL("lib/main-inspector.mjs", root),
   "utf8",
 );
+const mainHookReadiness = await readFile(
+  new URL("lib/main-hook-readiness.mjs", root),
+  "utf8",
+);
 const appServerProtocolAdapter = await readFile(
   new URL("lib/app-server-protocol-adapter.mjs", root),
   "utf8",
 );
 
-test("wrapper 0.3.3.1 separates minimum, recommended, and compatibility identities", () => {
+test("wrapper 0.3.3.2 separates minimum, recommended, and compatibility identities", () => {
   assert.equal(metadata.version, "0.3.3");
-  assert.equal(metadata.spineAppVersion, "0.3.3.1");
+  assert.equal(metadata.spineAppVersion, "0.3.3.2");
   assert.equal(metadata.minimumSpineCodexVersion, "0.2.2");
   assert.equal(metadata.recommendedSpineCodexVersion, "0.3.3");
   assert.equal(metadata.validatedCodexCompatibilityVersion, "0.147.0");
   assert.deepEqual(metadata.validatedDesktopVersions, [
     "26.810.41047",
     "26.818.41509",
+    "26.825.51511",
   ]);
-  assert.match(launcher, /APP_VERSION = "0\.3\.3\.1"/);
+  assert.match(launcher, /APP_VERSION = "0\.3\.3\.2"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
   assert.match(launcher, /RECOMMENDED_SPINE_CODEX_VERSION = "0\.3\.3"/);
   assert.match(launcher, /VALIDATED_CODEX_COMPATIBILITY_VERSION = "0\.147\.0"/);
-  assert.match(renderer, /VERSION = "0\.3\.3\.1"/);
+  assert.match(renderer, /VERSION = "0\.3\.3\.2"/);
   assert.equal(compatibility.spineCodexAppVersion, metadata.spineAppVersion);
   assert.deepEqual(compatibility.local, {
     minimumSpineCodexVersion: metadata.minimumSpineCodexVersion,
@@ -85,6 +90,7 @@ test("release builder bundles only wrapper files and a pinned Node runtime", () 
   assert.match(builder, /"compatibility\.json"/);
   assert.match(builder, /lib", "spine-codex-compatibility\.mjs/);
   assert.match(builder, /lib", "desktop-bundle-contract\.mjs/);
+  assert.match(builder, /lib", "main-hook-readiness\.mjs/);
   assert.match(builder, /await rm\(extracted, \{ recursive: true, force: true \}\)/);
   assert.match(builder, /await rm\(nodeArchive, \{ force: true \}\)/);
   assert.match(builder, /await rm\(app, \{ recursive: true, force: true \}\)/);
@@ -128,6 +134,7 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(macosCliShim, /SPINE_CODEX_SHIM_NODE/);
   assert.match(macosCliShim, /spine-codex\.mjs/);
   assert.match(windowsBuilder, /lib", "main-inspector\.mjs/);
+  assert.match(windowsBuilder, /lib", "main-hook-readiness\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-output-filter\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-protocol-adapter\.mjs/);
   assert.match(windowsBuilder, /lib", "spine-codex-compatibility\.mjs/);
@@ -163,7 +170,7 @@ test("renderer injection survives Electron renderer replacement", () => {
   assert.match(mainHook, /patchLocalCliSelectorSource/);
   assert.match(launcher, /SPINE_CODEX_RENDERER_PATH:/);
   assert.match(launcher, /SPINE_CODEX_RENDERER_SHA256:/);
-  assert.match(launcher, /rendererRecovery !== true/);
+  assert.match(mainHookReadiness, /rendererRecovery !== true/);
   assert.match(mainHook, /web-contents-created/);
   assert.match(mainHook, /did-finish-load/);
   assert.match(mainHook, /executeJavaScript\(payload\.source, false\)/);
@@ -191,6 +198,12 @@ test("local dependency paths are discovered without translated UI labels", () =>
   assert.match(launcher, /!\["off", "removed"\]\.includes\(nodeCliInspectFuse\)/);
   assert.match(launcher, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
   assert.match(launcher, /Codex was not allowed to/);
-  assert.match(launcher, /process\.platform === "win32" \? 20_000 : 5_000/);
-  assert.match(launcher, /no renderer code was injected/);
+  assert.match(launcher, /timeoutMs: 20_000/);
+  assert.match(launcher, /progressGraceMs: 10_000/);
+  assert.match(launcher, /hardTimeoutMs: 30_000/);
+  assert.match(launcher, /finalGraceMs: 500/);
+  assert.match(mainHookReadiness, /MAIN_HOOK_PROGRESS_STATES/);
+  assert.match(mainHookReadiness, /main-process hook loaded/);
+  assert.match(mainHookReadiness, /main-process preload did not report startup/);
+  assert.doesNotMatch(mainHookReadiness, /no renderer code was injected/);
 });

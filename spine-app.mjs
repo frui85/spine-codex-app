@@ -9,6 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { inspectDesktopBundleContract } from "./lib/desktop-bundle-contract.mjs";
 import { injectMainProcessHook } from "./lib/main-inspector.mjs";
+import { waitForMainHookReady } from "./lib/main-hook-readiness.mjs";
 import {
   compareVersions,
   inspectSpineCodexIdentity,
@@ -17,7 +18,7 @@ import {
 } from "./lib/spine-codex-compatibility.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.3.3.1";
+const APP_VERSION = "0.3.3.2";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -28,7 +29,11 @@ const REMOTE_CLI_NAME = "spine-codex";
 const MIN_SPINE_CODEX_VERSION = "0.2.2";
 const RECOMMENDED_SPINE_CODEX_VERSION = "0.3.3";
 const VALIDATED_CODEX_COMPATIBILITY_VERSION = "0.147.0";
-const VALIDATED_DESKTOP_VERSIONS = ["26.810.41047", "26.818.41509"];
+const VALIDATED_DESKTOP_VERSIONS = [
+  "26.810.41047",
+  "26.818.41509",
+  "26.825.51511",
+];
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
 const MIN_WINDOWS_VERSION = "10.0.17763";
@@ -162,7 +167,12 @@ const [target] = await Promise.all([
   waitForTarget(debugPort),
   waitForMainHookReady(
     mainHookStatusPath,
-    process.platform === "win32" ? 20_000 : 5_000,
+    {
+      timeoutMs: 20_000,
+      progressGraceMs: 10_000,
+      hardTimeoutMs: 30_000,
+      finalGraceMs: 500,
+    },
   ),
 ]);
 await inject(target.webSocketDebuggerUrl, debugPort, SCRIPT);
@@ -1092,38 +1102,6 @@ async function waitForTarget(port) {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error(`timed out waiting for Codex renderer: ${lastError?.message ?? "no target"}`);
-}
-
-async function waitForMainHookReady(statusPath, timeoutMs = 5_000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastState = "not reported";
-  while (Date.now() < deadline) {
-    try {
-      const status = JSON.parse(await readFile(statusPath, "utf8"));
-      lastState = status.state ?? "invalid";
-      if (status.state === "ready") {
-        if (status.rendererRecovery !== true) {
-          throw new Error(
-            "the main-process hook did not install renderer crash recovery",
-          );
-        }
-        return status;
-      }
-      if (status.state === "incompatible") {
-        throw new Error(`incompatible Codex bundle: ${status.reason ?? "unknown structure"}`);
-      }
-    } catch (error) {
-      if (error?.code !== "ENOENT" && !/Unexpected end of JSON input/.test(error?.message ?? "")) {
-        throw error;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(
-    "SpineCodex SSH compatibility hook did not become ready " +
-      `(last state: ${lastState}). The Codex Desktop build did not load ` +
-      "the main-process preload; no renderer code was injected.",
-  );
 }
 
 async function inject(webSocketUrl, port, source) {

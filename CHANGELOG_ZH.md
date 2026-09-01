@@ -4,6 +4,22 @@
 
 ## 尚未发布
 
+## v0.3.3.2 - 2026-09-01
+
+仅 App 的启动就绪优化，继续以未修改的官方
+`@spinejit/spine-codex@0.3.3` 为验证基线。
+
+- 将 macOS 启动器固定 5 秒的主进程 hook 等待改为 20 秒初始 deadline，
+  并在识别到真实初始化进展时滑动续期。
+- 只有 hook 的已知初始化状态才算进展；始终保留 30 秒总硬上限，并在报告
+  失败前执行有界的最终状态读取。
+- 区分 preload 从未报告与 hook 已加载但异步 Renderer 或 app-server 恢复集成
+  尚未完成，不再给出误导性的 Renderer 未注入结论。
+- 使用虚拟时钟新增确定性回归测试，覆盖延迟 ready、进展 deadline、硬上限、
+  final grace、异常状态与 fail-closed 路径。
+- 已在 ChatGPT/Codex Desktop `26.825.51511`（build 7377）验证 bundle 与完整
+  启动路径。
+
 ## v0.3.3.1 - 2026-08-31
 
 仅 App 的 durability 恢复更新，继续以未修改的官方

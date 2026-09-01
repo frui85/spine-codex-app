@@ -2,7 +2,7 @@
 
 > **简体中文** · [English](FEATURES.md)
 
-本文记录 SpineCodex App v0.3.3.1 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v0.3.3.2 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
 本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
 
@@ -21,7 +21,7 @@ Codex 兼容身份、Apps 协议模式、Desktop 版本与 bundle 契约、Rende
 SHA-256 和远端最低要求。无法解析 npm 产品包时，产品版本为 `null`，但仍会
 结合兼容身份与真实协议探测判断该二进制是否可用。
 
-启动前必须完整退出 Codex Desktop。包装层使用随机的、仅限回环地址的 CDP 端口，验证 Renderer WebSocket，为初始目标注册 Renderer，完成区域注入后退出。经过验证的 Electron main hook 会独立保留窄范围的 `web-contents-created` 和 `did-finish-load` 监听器。它先对 `spine-view.js` 做 SHA-256 校验，然后在每次主区域加载完成时重新读取同一绝对资源路径。当前源码只会在精确的 `app://-/index.html` 区域执行，因此 Renderer 崩溃、重新加载或 BrowserWindow 替换都不会恢复过期的内存内 revision，也不需要启动器守护。完整 App 进程重启仍必须再次通过包装层启动。
+启动前必须完整退出 Codex Desktop。包装层使用随机的、仅限回环地址的 CDP 端口，验证 Renderer WebSocket，为初始目标注册 Renderer，完成区域注入后退出。启动器会给已验证的主进程 hook 20 秒完成初始化；识别到中间状态确实推进时，可把当前 deadline 滑动延长 10 秒，但 30 秒总硬上限会避免启动无限等待。在 deadline 边界和最后 500 ms grace window 都会重新读取一次状态，避免刚完成的 hook 被误报失败。若最终仍超时，提示会区分 preload 从未报告与 hook 已加载但异步集成尚未完成。经过验证的 Electron main hook 会独立保留窄范围的 `web-contents-created` 和 `did-finish-load` 监听器。它先对 `spine-view.js` 做 SHA-256 校验，然后在每次主区域加载完成时重新读取同一绝对资源路径。当前源码只会在精确的 `app://-/index.html` 区域执行，因此 Renderer 崩溃、重新加载或 BrowserWindow 替换都不会恢复过期的内存内 revision，也不需要启动器守护。完整 App 进程重启仍必须再次通过包装层启动。
 
 在 Windows 上，便携包会根据稳定的 `OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0` package family 和 AppX manifest 定位已安装的 Electron 可执行文件，不依赖本地化的开始菜单显示名称。原生 GUI 启动器直接启动该文件，使限定作用域的 `CODEX_CLI_PATH`、`NODE_OPTIONS` 和回环 CDP 参数进入新进程。第二个原生可执行文件把 Codex 后端启动适配到外部安装的 npm `spine-codex.cmd`。这两个文件都是由本仓库构建的轻量 shim，不包含 SpineCodex。Windows 包必须保持目录完整，因为私有 Node 运行时和包装层文件都按相对启动器的路径解析。
 
