@@ -1053,10 +1053,14 @@ async function launchCodexApp({
       });
       // Current macOS Desktop builds may disable Electron's Node CLI inspect
       // fuse, which makes --inspect-brk a no-op. SIGUSR1 is the supported Node
-      // runtime trigger for enabling the Inspector after process start; the
-      // CDP injector then pauses the process before loading the main hook.
-      await delay(50);
-      try { child.kill("SIGUSR1"); } catch {}
+      // runtime trigger for enabling the Inspector after process start. The
+      // Electron launcher can take longer than one event-loop turn to hand off
+      // to the real main process, so pulse SIGUSR1 over a short bounded window;
+      // repeated SIGUSR1 calls are idempotent once the Inspector is active.
+      for (const milliseconds of [50, 250, 750, 1_500]) {
+        await delay(milliseconds);
+        try { child.kill("SIGUSR1"); } catch {}
+      }
       child.unref();
       return child;
     }

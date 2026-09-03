@@ -79,7 +79,9 @@ test("wrapper 0.3.3.4 separates minimum, recommended, and compatibility identiti
 });
 
 test("launcher keeps its macOS inspector startup delay self-contained", () => {
-  assert.match(launcher, /await delay\(50\);/);
+  assert.match(launcher, /for \(const milliseconds of \[50, 250, 750, 1_500\]\)/);
+  assert.match(launcher, /await delay\(milliseconds\);/);
+  assert.match(launcher, /child\.kill\("SIGUSR1"\)/);
   assert.match(
     launcher,
     /function delay\(milliseconds\) \{\s*return new Promise\(\(resolve\) => setTimeout\(resolve, milliseconds\)\);\s*\}/s,
