@@ -78,6 +78,14 @@ test("wrapper 0.3.3.4 separates minimum, recommended, and compatibility identiti
   });
 });
 
+test("launcher keeps its macOS inspector startup delay self-contained", () => {
+  assert.match(launcher, /await delay\(50\);/);
+  assert.match(
+    launcher,
+    /function delay\(milliseconds\) \{\s*return new Promise\(\(resolve\) => setTimeout\(resolve, milliseconds\)\);\s*\}/s,
+  );
+});
+
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
   assert.equal(
     metadata.scripts["build:macos"],

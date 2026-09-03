@@ -1207,6 +1207,10 @@ function timeout(milliseconds, message) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds));
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 function fail(message) {
   console.error(`spine-app: ${message}`);
   process.exit(1);
