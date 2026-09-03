@@ -51,6 +51,47 @@ test("injects a CommonJS hook before an inspected main script resumes", async ()
   }
 });
 
+test("enables a runtime Inspector after a fuse-off style launch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine inspector runtime "));
+  const hookPath = join(directory, "probe.cjs");
+  const entryPath = join(directory, "entry.cjs");
+  await writeFile(
+    hookPath,
+    'globalThis.__spineInspectorProbe = "runtime-injected";\n',
+    "utf8",
+  );
+  await writeFile(
+    entryPath,
+    'const until = Date.now() + 10_000; while (Date.now() < until) {}\nsetInterval(() => {}, 1000);\n',
+    "utf8",
+  );
+  const port = await reservePort();
+  const child = spawn(process.execPath, [
+    `--inspect-port=127.0.0.1:${port}`,
+    entryPath,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+
+  try {
+    await new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    child.kill("SIGUSR1");
+    const result = await injectMainProcessHook({
+      port,
+      expectedPid: child.pid,
+      hookPath,
+      timeoutMs: 5_000,
+    });
+    assert.equal(result.loaded, true);
+  } finally {
+    if (child.exitCode == null) child.kill();
+    await new Promise((resolve) => child.once("exit", resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects a non-loopback or wrong-port Inspector target", () => {
   assert.throws(
     () => validateInspectorWebSocketUrl("ws://192.0.2.1:9229/id", 9229),

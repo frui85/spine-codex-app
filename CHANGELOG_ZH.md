@@ -4,6 +4,16 @@
 
 ## 尚未发布
 
+## v0.3.3.4 - 2026-09-03
+
+修复当前 Codex Desktop 关闭 Electron Inspector fuse 时的 App 启动超时。
+
+- 用只作用于本次新启动 Desktop 进程的运行时 Inspector 触发替换无效的
+  macOS `--inspect-brk` 后备路径。
+- 通过 CDP 暂停进程并校验被连接的 PID；目标缺失或属于其他进程时继续
+  fail closed。
+- 官方 `@spinejit/spine-codex@0.3.3` CLI 与用户会话数据保持不变。
+
 ## v0.3.3.3 - 2026-09-03
 
 针对当前 Codex Desktop `26.901.20858` 的仅 App 兼容更新。

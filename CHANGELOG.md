@@ -4,6 +4,18 @@
 
 ## Unreleased
 
+## v0.3.3.4 — 2026-09-03
+
+App-only startup fix for current Codex Desktop builds with Electron Inspector
+fuses disabled.
+
+- Replaces the ineffective macOS `--inspect-brk` fallback with a runtime
+  Inspector trigger sent only to the newly launched Desktop process.
+- Pauses through CDP, verifies the inspected PID, and keeps startup fail-closed
+  when the target is missing or belongs to another process.
+- Keeps the official `@spinejit/spine-codex@0.3.3` CLI and user session data
+  unchanged.
+
 ## v0.3.3.3 — 2026-09-03
 
 App-only compatibility update for current Codex Desktop `26.901.20858`.

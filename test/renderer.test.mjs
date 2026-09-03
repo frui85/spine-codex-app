@@ -278,7 +278,7 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.3.3.3");
+assert.equal(api.version, "0.3.3.4");
 assert.equal(api.revision, 12);
 
 const recoveredThreadId = "00000000-0000-0000-0000-000000000099";
@@ -1473,7 +1473,7 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.3.3.3");
+assert.equal(restoredApi.version, "0.3.3.4");
 assert.equal(restoredApi.revision, 12);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(

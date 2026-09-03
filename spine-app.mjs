@@ -26,7 +26,7 @@ import {
 } from "./lib/spine-codex-compatibility.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.3.3.3";
+const APP_VERSION = "0.3.3.4";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -160,6 +160,8 @@ if (mainInspectorPort != null) {
   try {
     await injectMainProcessHook({
       port: mainInspectorPort,
+      fallbackPorts: process.platform === "darwin" ? [9229] : [],
+      expectedPid: launchedApp?.pid ?? null,
       hookPath: ELECTRON_MAIN_HOOK,
       timeoutMs: 15_000,
     });
@@ -1037,7 +1039,7 @@ async function launchCodexApp({
       const executable = resolveMacOsExecutable(appPath);
       const child = spawn(executable, [
         ...electronArguments,
-        `--inspect-brk=127.0.0.1:${mainInspectorPort}`,
+        `--inspect-port=127.0.0.1:${mainInspectorPort}`,
         ...(deepLink ? [deepLink] : []),
       ], {
         cwd: dirname(executable),
@@ -1049,6 +1051,12 @@ async function launchCodexApp({
         child.once("spawn", resolve);
         child.once("error", reject);
       });
+      // Current macOS Desktop builds may disable Electron's Node CLI inspect
+      // fuse, which makes --inspect-brk a no-op. SIGUSR1 is the supported Node
+      // runtime trigger for enabling the Inspector after process start; the
+      // CDP injector then pauses the process before loading the main hook.
+      await delay(50);
+      try { child.kill("SIGUSR1"); } catch {}
       child.unref();
       return child;
     }
