@@ -190,7 +190,7 @@ cd spine-codex-app
 
 推送匹配的 `v*` tag 会启动仓库内 GitHub Actions 发布流水线。工作流先校验 tag 与 `package.json#spineAppVersion`，运行完整检查，构建并验证两个 macOS DMG，上传不可变工作流资产，最后才发布 GitHub Release。Release 会先创建为草稿，避免上传失败时暴露不完整版本。Windows 工作流代码已保留，但有意禁用。
 
-当前 bundle 契约已在 ChatGPT/Codex Desktop `26.810.41047`、`26.818.41509`、`26.825.51511` 与 `26.901.20858` 上验证。当 macOS 关闭 `NODE_OPTIONS` 和 Node CLI Inspector fuse 时，启动器会通过本次启动的 Desktop PID 动态开启仅限回环地址的 Inspector，通过 CDP 暂停进程，并在主进程注入前校验 PID。诊断会只读扫描已安装 macOS `app.asar`，要求主进程补丁目标唯一，并要求版本检查与 CLI selector 共同位于唯一共享 bundle；未知或歧义结构会 fail closed。Windows Store 发现与依赖预检已在真实 Windows 环境验证；主进程 Inspector 路径仍需扩大真机验证后，才会把 Windows 作为受支持的 GitHub Release 资产发布。
+当前 bundle 契约已在 ChatGPT/Codex Desktop `26.810.41047`、`26.818.41509`、`26.825.51511` 与 `26.901.20858` 上验证。macOS 如果把 `nodeCliInspect` fuse 设为 `off` 或 `removed`，Electron 会忽略 `--inspect*` 和 `SIGUSR1`，SpineCodex App 无法注入主进程；现在会在预检阶段准确报出原因，不再启动一个未打补丁的 Desktop。具备 Inspector 能力的构建才会使用仅限回环地址的 Inspector、校验 PID 并注入 main hook。诊断会只读扫描已安装 macOS `app.asar`，要求主进程补丁目标唯一，并要求版本检查与 CLI selector 共同位于唯一共享 bundle；未知或歧义结构会 fail closed。Windows Store 发现与依赖预检已在真实 Windows 环境验证；主进程 Inspector 路径仍需扩大真机验证后，才会把 Windows 作为受支持的 GitHub Release 资产发布。
 
 SpineCodex 0.3.3 同时报告产品版本 `0.3.3` 与 Codex 兼容身份 `0.147.0`，App 会分别记录两者。OpenAI Codex `0.149.1` 不属于本版本的 SpineCodex 验证基线。图片生成在完成真实生成、消息回放、Tree 更新与恢复门禁前继续禁用。机器可读兼容矩阵见 [`compatibility.json`](compatibility.json)。
 

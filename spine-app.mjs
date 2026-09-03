@@ -166,10 +166,11 @@ if (mainInspectorPort != null) {
       timeoutMs: 15_000,
     });
   } catch (error) {
-    try { launchedApp?.kill(); } catch {}
     fail(
       "Codex main-process injection failed; Codex was not allowed to " +
-        `continue unpatched: ${error.message}`,
+        `continue unpatched: ${error.message}. ` +
+        "The launched Desktop process was left running; quit it manually " +
+        "before retrying.",
     );
   }
   console.log("ready.");
@@ -518,6 +519,18 @@ async function diagnose(options) {
       } else if (process.platform === "darwin" && nodeOptionsFuse === "on") {
         add("ok", "Codex Desktop", appPath);
         add("ok", "SSH compatibility hook", "Electron NODE_OPTIONS fuse is enabled");
+      } else if (
+        process.platform === "darwin" &&
+        ["off", "removed"].includes(nodeCliInspectFuse)
+      ) {
+        add("ok", "Codex Desktop", appPath);
+        add(
+          "error",
+          "SSH compatibility hook",
+          `Electron main-process Inspector fuse is ${nodeCliInspectFuse}; ` +
+            "this Desktop build blocks --inspect* and SIGUSR1",
+          `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
+        );
       } else if (process.platform === "darwin") {
         add("ok", "Codex Desktop", appPath);
         add(

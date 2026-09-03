@@ -210,6 +210,8 @@ test("local dependency paths are discovered without translated UI labels", () =>
   assert.match(launcher, /process\.platform === "win32"/);
   assert.match(launcher, /Inspector fuse marker \$\{nodeCliInspectFuse\}; runtime injection required/);
   assert.match(launcher, /!\["off", "removed"\]\.includes\(nodeCliInspectFuse\)/);
+  assert.match(launcher, /Electron main-process Inspector fuse is \$\{nodeCliInspectFuse\}/);
+  assert.match(launcher, /The launched Desktop process was left running/);
   assert.match(launcher, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
   assert.match(launcher, /Codex was not allowed to/);
   assert.match(launcher, /timeoutMs: 20_000/);

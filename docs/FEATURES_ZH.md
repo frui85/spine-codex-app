@@ -25,7 +25,7 @@ SHA-256 和远端最低要求。无法解析 npm 产品包时，产品版本为 
 
 在 Windows 上，便携包会根据稳定的 `OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0` package family 和 AppX manifest 定位已安装的 Electron 可执行文件，不依赖本地化的开始菜单显示名称。原生 GUI 启动器直接启动该文件，使限定作用域的 `CODEX_CLI_PATH`、`NODE_OPTIONS` 和回环 CDP 参数进入新进程。第二个原生可执行文件把 Codex 后端启动适配到外部安装的 npm `spine-codex.cmd`。这两个文件都是由本仓库构建的轻量 shim，不包含 SpineCodex。Windows 包必须保持目录完整，因为私有 Node 运行时和包装层文件都按相对启动器的路径解析。
 
-AppX 可执行文件可能只是打包启动器，而不是携带 fuse wire 的 Electron 二进制；当前 Store 构建也可能忽略 `NODE_OPTIONS`。因此 Windows 使用独立的预入口路径：启动器提供一个新的、仅限回环地址的 `--inspect-brk` 端口，通过 Node Inspector 协议在暂停的 CommonJS frame 中加载 main hook，恢复进程后立即关闭连接。只有 hook 为两个必需的 bundle 结构写入已验证的 `ready` 握手后，才会继续注入 Renderer。已知被禁用的 Node CLI Inspector fuse 会直接导致预检失败；无法从打包启动器读取 fuse 时，以运行时注入结果作为权威判断。
+AppX 可执行文件可能只是打包启动器，而不是携带 fuse wire 的 Electron 二进制；当前 Store 构建也可能忽略 `NODE_OPTIONS`。因此 Windows 使用独立的预入口路径：启动器提供一个新的、仅限回环地址的 `--inspect-brk` 端口，通过 Node Inspector 协议在暂停的 CommonJS frame 中加载 main hook，恢复进程后立即关闭连接。只有 hook 为两个必需的 bundle 结构写入已验证的 `ready` 握手后，才会继续注入 Renderer。已知被禁用的 Node CLI Inspector fuse 会直接导致预检失败；无法从打包启动器读取 fuse 时，以运行时注入结果作为权威判断。macOS 同样会在 `nodeCliInspect` fuse 为 `off` 或 `removed` 时提前阻止启动，因为该状态会同时禁用 `--inspect*` 与 `SIGUSR1`。
 
 ## 远程 SSH 主机
 

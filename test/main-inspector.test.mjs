@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   injectMainProcessHook,
   validateInspectorWebSocketUrl,
+  waitForInspectorTarget,
 } from "../lib/main-inspector.mjs";
 
 test("injects a CommonJS hook before an inspected main script resumes", async () => {
@@ -104,6 +105,18 @@ test("rejects a non-loopback or wrong-port Inspector target", () => {
   assert.equal(
     validateInspectorWebSocketUrl("ws://127.0.0.1:9229/id", 9229),
     "ws://127.0.0.1:9229/id",
+  );
+});
+
+test("explains when the Desktop Inspector endpoint is unavailable", async () => {
+  await assert.rejects(
+    waitForInspectorTarget(39999, {
+      timeoutMs: 20,
+      fetchImpl: async () => {
+        throw new Error("fetch failed");
+      },
+    }),
+    /127\.0\.0\.1:39999: fetch failed.*nodeCliInspect fuse is off/,
   );
 });
 
