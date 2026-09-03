@@ -4,7 +4,15 @@ import { accessSync, constants } from "node:fs";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
 import { homedir, release as osRelease, tmpdir } from "node:os";
-import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  resolve,
+} from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { inspectDesktopBundleContract } from "./lib/desktop-bundle-contract.mjs";
@@ -18,7 +26,7 @@ import {
 } from "./lib/spine-codex-compatibility.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.3.3.2";
+const APP_VERSION = "0.3.3.3";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -33,6 +41,7 @@ const VALIDATED_DESKTOP_VERSIONS = [
   "26.810.41047",
   "26.818.41509",
   "26.825.51511",
+  "26.901.20858",
 ];
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
@@ -103,7 +112,9 @@ if (isAppRunning(appPath)) {
 }
 
 const debugPort = await reservePort();
-const mainInspectorPort = process.platform === "win32" ? await reservePort() : null;
+const mainInspectorPort = needsMainProcessInspector(diagnosis)
+  ? await reservePort()
+  : null;
 const mainHookStatusPath = join(
   tmpdir(),
   `spine-codex-main-hook-${process.pid}-${debugPort}.json`,
@@ -155,7 +166,7 @@ if (mainInspectorPort != null) {
   } catch (error) {
     try { launchedApp?.kill(); } catch {}
     fail(
-      "Windows main-process injection failed; Codex was not allowed to " +
+      "Codex main-process injection failed; Codex was not allowed to " +
         `continue unpatched: ${error.message}`,
     );
   }
@@ -201,6 +212,11 @@ function parseArgs(values) {
   }
   if (parsed.json && !parsed.diagnose) fail("--json requires --diagnose");
   return parsed;
+}
+
+function needsMainProcessInspector(currentDiagnosis) {
+  if (process.platform === "win32") return true;
+  return process.platform === "darwin" && currentDiagnosis.nodeOptionsFuse !== "on";
 }
 
 function requiredValue(values, index, option) {
@@ -500,6 +516,13 @@ async function diagnose(options) {
       } else if (process.platform === "darwin" && nodeOptionsFuse === "on") {
         add("ok", "Codex Desktop", appPath);
         add("ok", "SSH compatibility hook", "Electron NODE_OPTIONS fuse is enabled");
+      } else if (process.platform === "darwin") {
+        add("ok", "Codex Desktop", appPath);
+        add(
+          "info",
+          "SSH compatibility hook",
+          `Electron NODE_OPTIONS fuse is ${nodeOptionsFuse}; loopback Inspector injection required`,
+        );
       } else {
         const fuseName = process.platform === "win32"
           ? "main-process Inspector"
@@ -1010,6 +1033,25 @@ async function launchCodexApp({
     `--remote-debugging-port=${debugPort}`,
   ];
   if (process.platform === "darwin") {
+    if (mainInspectorPort != null) {
+      const executable = resolveMacOsExecutable(appPath);
+      const child = spawn(executable, [
+        ...electronArguments,
+        `--inspect-brk=127.0.0.1:${mainInspectorPort}`,
+        ...(deepLink ? [deepLink] : []),
+      ], {
+        cwd: dirname(executable),
+        detached: true,
+        env: appEnvironment,
+        stdio: "ignore",
+      });
+      await new Promise((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      child.unref();
+      return child;
+    }
     const openArguments = [
       "-n",
       "--env",
@@ -1066,6 +1108,16 @@ async function launchCodexApp({
   });
   child.unref();
   return child;
+}
+
+function resolveMacOsExecutable(appPath) {
+  const bundleName = basename(appPath, ".app");
+  const candidate = join(appPath, "Contents", "MacOS", bundleName);
+  try {
+    accessSync(candidate, constants.X_OK);
+    return candidate;
+  } catch {}
+  return join(appPath, "Contents", "MacOS", "ChatGPT");
 }
 
 function reservePort() {

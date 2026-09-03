@@ -4,6 +4,17 @@
 
 ## Unreleased
 
+## v0.3.3.3 — 2026-09-03
+
+App-only compatibility update for current Codex Desktop `26.901.20858`.
+
+- Adds the new Desktop build to the validated bundle matrix.
+- Uses a loopback-only Electron main-process Inspector when Desktop disables
+  the `NODE_OPTIONS` fuse, while keeping the official
+  `@spinejit/spine-codex@0.3.3` CLI unchanged.
+- Keeps startup fail-closed when the bundle contract or Inspector handshake
+  cannot be verified.
+
 ## v0.3.3.2 — 2026-09-01
 
 App-only startup readiness update validated against the unchanged official
