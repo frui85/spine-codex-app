@@ -4,6 +4,15 @@
 
 ## 尚未发布
 
+## v0.3.3.3 - 2026-09-03
+
+针对当前 Codex Desktop `26.901.20858` 的仅 App 兼容更新。
+
+- 将新 Desktop 构建加入已验证 bundle 矩阵。
+- 当 Desktop 关闭 `NODE_OPTIONS` fuse 时，改用仅限回环地址的 Electron
+  主进程 Inspector 注入；官方 `@spinejit/spine-codex@0.3.3` CLI 保持不变。
+- bundle 契约或 Inspector 握手无法验证时继续 fail closed。
+
 ## v0.3.3.2 - 2026-09-01
 
 仅 App 的启动就绪优化，继续以未修改的官方
