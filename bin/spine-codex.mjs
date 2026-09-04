@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { constants, realpathSync } from "node:fs";
+import { accessSync } from "node:fs";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createAppServerOutputFilter } from "../lib/app-server-output-filter.mjs";
 import { createAppServerProtocolAdapter } from "../lib/app-server-protocol-adapter.mjs";
 
-const binary = process.env.SPINE_CODEX_BINARY;
+const adapterName = basename(process.argv[1] ?? "spine-codex-app-adapter");
+const binary = process.env.SPINE_CODEX_BINARY || findSpineCodexBinary();
 if (!binary) {
-  console.error("spine-codex shim: SPINE_CODEX_BINARY is not set");
+  console.error(
+    `${adapterName}: unable to find the real spine-codex executable; ` +
+    "set SPINE_CODEX_BINARY or install spine-codex in PATH",
+  );
   process.exit(1);
 }
 
@@ -34,7 +42,7 @@ if (filtersAppServerOutput) {
       if (reportedSuppression) return;
       reportedSuppression = true;
       console.error(
-        "spine-codex shim: suppressed duplicate app/list/updated notifications",
+        `${adapterName}: suppressed duplicate app/list/updated notifications`,
       );
     },
   });
@@ -47,7 +55,7 @@ if (filtersAppServerOutput) {
       if (reportedFallbacks.has(method)) return;
       reportedFallbacks.add(method);
       console.error(
-        `spine-codex shim: using legacy app/list compatibility for ${method}`,
+        `${adapterName}: using legacy app/list compatibility for ${method}`,
       );
     },
   });
@@ -63,22 +71,66 @@ if (filtersAppServerOutput) {
 }
 
 child.once("error", (error) => {
-  console.error(`spine-codex shim: ${error.message}`);
+  console.error(`${adapterName}: ${error.message}`);
   process.exit(1);
 });
 child.once("exit", async (status, signal) => {
   try {
     await outputDrained;
   } catch (error) {
-    console.error(`spine-codex shim: stdout filter failed: ${error.message}`);
+    console.error(`${adapterName}: stdout filter failed: ${error.message}`);
     process.exit(1);
   }
   if (signal) {
-    console.error(`spine-codex shim: child exited from signal ${signal}`);
+    console.error(`${adapterName}: child exited from signal ${signal}`);
     process.exit(1);
   }
   process.exit(status ?? 1);
 });
+
+function findSpineCodexBinary() {
+  const ownDirectory = dirname(fileURLToPath(import.meta.url));
+  const executableNames = process.platform === "win32"
+    ? ["spine-codex.exe", "spine-codex.cmd", "spine-codex.bat", "spine-codex"]
+    : ["spine-codex"];
+  const directories = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  if (process.platform !== "win32") {
+    directories.push(
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+    );
+    if (process.env.HOME) {
+      directories.push(
+        join(process.env.HOME, ".local", "bin"),
+        join(process.env.HOME, ".npm-global", "bin"),
+        join(process.env.HOME, ".volta", "bin"),
+      );
+    }
+  }
+
+  const seen = new Set();
+  for (const directory of directories) {
+    if (!directory) continue;
+    for (const name of executableNames) {
+      const candidate = resolve(directory, name);
+      if (seen.has(candidate)) continue;
+      seen.add(candidate);
+      // Release bundles keep the legacy shim beside the new adapter. Never
+      // rediscover that shim and recurse back into this module.
+      if (dirname(candidate) === ownDirectory) continue;
+      try {
+        accessSync(
+          candidate,
+          process.platform === "win32" ? constants.F_OK : constants.X_OK,
+        );
+        const realCandidate = realpathSync(candidate);
+        if (dirname(realCandidate) === ownDirectory) continue;
+        return candidate;
+      } catch {}
+    }
+  }
+  return null;
+}
 
 function consumeLines(stream, onLine, onEnd) {
   let buffered = "";

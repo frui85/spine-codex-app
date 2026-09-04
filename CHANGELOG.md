@@ -4,6 +4,23 @@
 
 ## Unreleased
 
+## v26.901.20858 — 2026-09-05
+
+Exact-version macOS release for ChatGPT/Codex Desktop `26.901.20858`.
+Desktop versions below `26.901.20858` are unsupported. Desktop versions above
+it are unverified and not guaranteed compatible. Only the exact version match
+is covered by this release's compatibility guarantee.
+
+- Restores macOS compatibility with ChatGPT `26.901.20858` without relying on
+  Electron `NODE_OPTIONS` or main-process Inspector fuses. The supported
+  `CODEX_CLI_PATH=spine-codex` boundary resolves a private local adapter after
+  Desktop hydrates its login-shell environment, while SSH hosts continue to
+  resolve their own unchanged `spine-codex` command.
+- Keeps a loopback-only CDP supervisor alive with ChatGPT so the Spine renderer
+  is restored after page reloads and target replacement.
+- Requires SpineCodex 0.3.3 or newer on the current macOS path; it reports an
+  upstream-compatible app-server version accepted by current Desktop.
+
 ## v0.2.2.4 — 2026-08-11
 
 Wrapper-only revision; the minimum supported SpineCodex version remains 0.2.2.

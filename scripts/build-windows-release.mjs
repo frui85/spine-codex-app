@@ -85,6 +85,10 @@ await copyFile(
   join(wrapper, "lib", "main-inspector.mjs"),
 );
 await copyFile(
+  join(ROOT, "lib", "renderer-supervisor.mjs"),
+  join(wrapper, "lib", "renderer-supervisor.mjs"),
+);
+await copyFile(
   join(ROOT, "lib", "app-server-output-filter.mjs"),
   join(wrapper, "lib", "app-server-output-filter.mjs"),
 );

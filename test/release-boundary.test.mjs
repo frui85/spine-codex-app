@@ -28,18 +28,28 @@ const mainInspector = await readFile(
   new URL("lib/main-inspector.mjs", root),
   "utf8",
 );
+const rendererSupervisor = await readFile(
+  new URL("lib/renderer-supervisor.mjs", root),
+  "utf8",
+);
 const appServerProtocolAdapter = await readFile(
   new URL("lib/app-server-protocol-adapter.mjs", root),
   "utf8",
 );
 
-test("wrapper revision 0.2.2.4 tracks SpineCodex 0.2.2", () => {
-  assert.equal(metadata.version, "0.2.2");
-  assert.equal(metadata.spineAppVersion, "0.2.2.4");
-  assert.equal(metadata.spineCodexVersion, "0.2.2");
-  assert.match(launcher, /APP_VERSION = "0\.2\.2\.4"/);
+test("release version exactly tracks the supported Codex Desktop version", () => {
+  assert.equal(metadata.version, "26.901.20858");
+  assert.equal(metadata.spineAppVersion, "26.901.20858");
+  assert.equal(metadata.codexDesktopVersion, "26.901.20858");
+  assert.equal(metadata.spineCodexVersion, "0.3.3");
+  assert.match(launcher, /APP_VERSION = "26\.901\.20858"/);
+  assert.match(launcher, /SUPPORTED_DESKTOP_VERSION = "26\.901\.20858"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(renderer, /VERSION = "0\.2\.2\.4"/);
+  assert.match(launcher, /MIN_CODEX_APP_SERVER_VERSION = "0\.141\.0"/);
+  assert.match(launcher, /MIN_SPINE_CODEX_RELEASE = "0\.3\.3"/);
+  assert.match(renderer, /VERSION = "26\.901\.20858"/);
+  assert.match(launcher, /verified exact match/);
+  assert.match(launcher, /unverified with release/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
@@ -85,9 +95,11 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(macosCliShim, /SPINE_CODEX_SHIM_NODE/);
   assert.match(macosCliShim, /spine-codex\.mjs/);
   assert.match(windowsBuilder, /lib", "main-inspector\.mjs/);
+  assert.match(windowsBuilder, /lib", "renderer-supervisor\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-output-filter\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-protocol-adapter\.mjs/);
   assert.match(builder, /lib", "app-server-protocol-adapter\.mjs/);
+  assert.match(builder, /lib", "renderer-supervisor\.mjs/);
   assert.match(appServerProtocolAdapter, /APP_INSTALLED_METHOD = "app\/installed"/);
   assert.match(appServerProtocolAdapter, /APP_READ_METHOD = "app\/read"/);
   assert.match(appServerProtocolAdapter, /APP_LIST_METHOD = "app\/list"/);
@@ -104,20 +116,19 @@ test("no-argument launch does not create a root workspace task", () => {
 });
 
 test("renderer injection survives Electron renderer replacement", () => {
-  assert.match(launcher, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
-  assert.match(
-    launcher,
-    /`SPINE_CODEX_LOCAL_CLI_PATH=\$\{appEnvironment\.SPINE_CODEX_LOCAL_CLI_PATH\}`/,
-  );
-  assert.match(
-    launcher,
-    /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
-  );
+  assert.match(launcher, /await superviseRenderer\(/);
+  assert.match(rendererSupervisor, /Page\.addScriptToEvaluateOnNewDocument/);
+  assert.match(rendererSupervisor, /Page\.loadEventFired/);
+  assert.match(rendererSupervisor, /window\.__spineCodexSupervisorRevision/);
+  assert.match(rendererSupervisor, /MAIN_RENDERER_ORIGIN = "app:\/\/-"/);
+  assert.match(rendererSupervisor, /AVATAR_OVERLAY_ROUTE = "\/avatar-overlay"/);
+  assert.match(rendererSupervisor, /lastEndpointSuccess/);
+  assert.doesNotMatch(rendererSupervisor, /setInterval\(/);
+
+  // Windows retains the older main-hook recovery path until its CLI selector
+  // can also move to the external boundary.
   assert.match(mainHook, /SPINE_CODEX_LOCAL_CLI_PATH/);
   assert.match(mainHook, /patchLocalCliSelectorSource/);
-  assert.match(launcher, /SPINE_CODEX_RENDERER_PATH:/);
-  assert.match(launcher, /SPINE_CODEX_RENDERER_SHA256:/);
-  assert.match(launcher, /rendererRecovery !== true/);
   assert.match(mainHook, /web-contents-created/);
   assert.match(mainHook, /did-finish-load/);
   assert.match(mainHook, /executeJavaScript\(payload\.source, false\)/);
@@ -126,7 +137,19 @@ test("renderer injection survives Electron renderer replacement", () => {
   assert.match(mainHook, /initialRoute/);
   assert.match(mainHook, /\/avatar-overlay/);
   assert.match(mainHook, /SHA-256 mismatch/);
-  assert.doesNotMatch(mainHook, /setInterval\(/);
+});
+
+test("macOS selects the local adapter without changing the SSH command", () => {
+  assert.match(launcher, /CODEX_CLI_PATH: REMOTE_CLI_NAME/);
+  assert.match(launcher, /await createMacShellEnvironment\(LOCAL_CLI_DIR\)/);
+  assert.match(launcher, /ZDOTDIR/);
+  assert.match(
+    launcher,
+    /export PATH="\\\$\{_spine_app_adapter_dir\}:\\\$\{PATH:-\}"/,
+  );
+  assert.match(launcher, /no Electron main-process hook required/);
+  assert.match(windowsCliShim, /findSpineCodexBinary/);
+  assert.match(windowsCliShim, /dirname\(candidate\) === ownDirectory/);
 });
 
 test("local dependency paths are discovered without translated UI labels", () => {
@@ -145,6 +168,5 @@ test("local dependency paths are discovered without translated UI labels", () =>
   assert.match(launcher, /!\["off", "removed"\]\.includes\(nodeCliInspectFuse\)/);
   assert.match(launcher, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
   assert.match(launcher, /Codex was not allowed to/);
-  assert.match(launcher, /process\.platform === "win32" \? 20_000 : 5_000/);
-  assert.match(launcher, /no renderer code was injected/);
+  assert.match(launcher, /await superviseRenderer\(/);
 });

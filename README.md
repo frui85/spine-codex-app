@@ -12,17 +12,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v0.2.2.4"><img alt="Release v0.2.2.4" src="https://img.shields.io/badge/release-v0.2.2.4-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/tag/v26.901.20858"><img alt="Release v26.901.20858" src="https://img.shields.io/badge/release-v26.901.20858-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
-  <img alt="SpineCodex 0.2.2+" src="https://img.shields.io/badge/SpineCodex-0.2.2%2B-17171B?style=flat-square">
+  <img alt="SpineCodex 0.3.3+ for current macOS source" src="https://img.shields.io/badge/macOS_source-SpineCodex_0.3.3%2B-17171B?style=flat-square">
 </p>
 
 <p align="center">
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v26.901.20858/SpineCodex-App-v26.901.20858-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/izumedonabe/spine-codex-app/releases/download/v26.901.20858/SpineCodex-App-v26.901.20858-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -34,6 +34,12 @@
 <br>
 
 SpineCodex already gives long-running Codex work a real structure: scoped tasks, closed-node memory, compaction boundaries, and concurrent Spawn branches. **SpineCodex App makes that structure visible and operable without replacing the Codex experience.**
+
+> **Exact-version compatibility:** SpineCodex App `v26.901.20858` is tested and
+> guaranteed only with macOS ChatGPT/Codex Desktop `26.901.20858`, without
+> modifying or re-signing the official App. Older Desktop versions are not
+> supported. Newer Desktop versions are not guaranteed; install the wrapper
+> release whose version exactly matches the installed Desktop version.
 
 <table>
   <tr>
@@ -80,9 +86,9 @@ Spine controls live directly below Codex's Model features. Settings are host-awa
 
 - **Pinned and floating summaries** — the same tree mounts in either native summary surface.
 - **Codex-aware language and appearance** — follows 10 App locales, light/dark colors, typography, motion tokens, and reduced-motion preference.
-- **Event-driven by default** — no watchdog, polling loop, React Fiber scan, or permanent whole-page observer.
-- **Local and remote** — launches the installed SpineCodex locally and selects `spine-codex` through Codex's native SSH transport remotely.
-- **Bounded and reversible** — one latest snapshot per task, bounded persistence, no `app.asar` modification, and narrow hooks that fail closed.
+- **Event-driven UI** — no React Fiber scan or permanent whole-page observer; a narrow launcher supervisor only watches the loopback CDP target lifecycle.
+- **Local and remote** — the local `spine-codex` command is intercepted by the wrapper adapter, while native SSH resolves the same portable name on each host.
+- **Bounded and reversible** — one latest snapshot per task, bounded persistence, no `app.asar` modification or App re-signing.
 
 The full cache limits, rendering contracts, navigation behavior, and performance design are documented in [Feature details](docs/FEATURES.md).
 
@@ -92,7 +98,7 @@ The full cache limits, rendering contracts, navigation behavior, and performance
 
 - macOS 14 or newer, or Windows 10 build 17763 or newer
 - The current [ChatGPT desktop app with Codex](https://chatgpt.com/download/)
-- SpineCodex 0.2.2 or newer:
+- SpineCodex 0.3.3 or newer for the current macOS App:
 
 ```sh
 npm install -g @spinejit/spine-codex@latest
@@ -105,8 +111,8 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.2.2.4-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.2.2.4-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v0.2.2.4/SpineCodex-App-v0.2.2.4-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v26.901.20858-macos-arm64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v26.901.20858/SpineCodex-App-v26.901.20858-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v26.901.20858-macos-x64.dmg](https://github.com/izumedonabe/spine-codex-app/releases/download/v26.901.20858/SpineCodex-App-v26.901.20858-macos-x64.dmg) |
 
 The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
@@ -149,24 +155,28 @@ Explicit `--app` and `--spine-codex` options remain available for development an
 ```text
 SpineCodex App
   ├─ launches the installed Codex Desktop app
-  ├─ points local app-server startup at the installed spine-codex
-  ├─ selects spine-codex for Codex's native SSH startup path
-  └─ injects and recovers one event-driven renderer extension
+  ├─ intercepts local spine-codex through its private protocol adapter
+  ├─ leaves the same portable spine-codex name for native SSH
+  └─ supervises one renderer extension over loopback CDP
        ├─ turn/spineTree/updated
        └─ turn/spineSpawnProgress/updated
 ```
 
-The launcher does not modify `app.asar`, replace the Codex React tree, or patch the application on disk. Renderer integration uses a Shadow DOM surface and narrow structural hooks. Local startup uses a dedicated absolute path to the wrapper's private shim, so a Desktop login-shell environment refresh cannot bypass its output filter. Remote SSH keeps the portable command name `spine-codex`, resolved independently by each host's login shell. Remote bootstrap is serialized and idempotent: it reuses a healthy SpineCodex server, replaces only a same-user stale or official-Codex socket owner, and does not start the proxy until the Unix socket is demonstrably ready. A one-time launcher/main-process readiness handshake verifies the local selector, version check, and SSH bootstrap structures before startup is reported as successful; unknown bundles fail closed.
+The launcher does not modify `app.asar`, replace the Codex React tree, inject
+the Electron main process on macOS, or patch the application on disk. A
+temporary `ZDOTDIR` proxy preserves the user's own zsh startup files and puts
+the wrapper's private `spine-codex` adapter first only for the launched App.
+The adapter then starts the separately installed, unmodified SpineCodex binary
+and handles the existing protocol/output compatibility layer. Native SSH keeps
+the same portable command name, so each host resolves its own SpineCodex and
+does not need the wrapper adapter installed.
 
-The verified main hook also keeps two narrow Electron lifecycle listeners. It
-SHA-256 verifies the packaged `spine-view.js` at startup. On each main-window
-`did-finish-load`—including a reload after an Electron renderer crash—it reads
-the same absolute resource path again and executes the current renderer only in
-the exact `app://-/index.html` surface. This prevents a long-running main
-process from reviving an older in-memory renderer after the installed wrapper
-has been updated. There is no timer, polling watchdog, or extra resident
-process. The renderer's own revision guard makes the initial CDP injection and
-any recovery injection idempotent.
+The launcher remains alive with the App and holds a loopback-only CDP session
+to the exact `app://-/index.html` target. It registers the renderer for new
+documents, performs a guarded initial injection, reinjects after load events,
+and attaches again if Electron replaces the target. The renderer's SHA-256
+revision guard makes recovery idempotent. Windows currently retains its
+separate main-process Inspector compatibility path.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled runtime notices.
 
@@ -183,18 +193,18 @@ cd spine-codex-app
 ./spine-app /path/to/workspace
 ```
 
-Source usage requires Node.js 22 or newer. Opening without a path launches the existing Codex interface; it does not create a task rooted at `/`. The launcher exits after verifying the main hook and initial renderer injection; Codex Desktop keeps running, and the in-process lifecycle listeners recover Spine View if Electron replaces its renderer.
+Source usage requires Node.js 22 or newer. Opening without a path launches the existing Codex interface; it does not create a task rooted at `/`. Keep the launcher running with ChatGPT: its loopback CDP supervisor recovers Spine View when Electron reloads or replaces the renderer and exits after the App closes.
 
 </details>
 
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-The first three release components track the minimum supported SpineCodex release; a fourth component identifies wrapper-only revisions. This release is **v0.2.2.4** and still requires SpineCodex 0.2.2 or newer. Version tracking does not mean SpineCodex is redistributed here.
+The release version exactly matches the only guaranteed-compatible Codex Desktop version. This release is **v26.901.20858** for Desktop **26.901.20858**. Desktop versions below it are unsupported; versions above it are unverified and not guaranteed. SpineCodex 0.3.3 or newer remains a separate external requirement and is not redistributed here.
 
 Pushing a matching `v*` tag starts the checked-in GitHub Actions release pipeline. The workflow validates the tag against `package.json#spineAppVersion`, runs the full checks, builds and verifies both macOS DMGs, uploads immutable workflow artifacts, and only then publishes the GitHub Release. Release creation begins as a draft so a failed upload cannot expose a partial release. Windows workflow code is present but intentionally disabled.
 
-The macOS wrapper has been tested with ChatGPT/Codex Desktop builds `26.727.40816`, `26.727.51351`, `26.730.61309`, `26.730.61639`, and `26.803.41515`. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the new main-process Inspector path is awaiting another real-device run and is not yet claimed as a supported GitHub Release asset. Codex internals can change, so compatibility-sensitive hooks identify both the SSH bootstrap and its version checker by narrow source structures—not generated filenames or minified export names—and fail closed instead of patching an unknown bundle.
+The current macOS external-adapter/CDP release is tested and guaranteed only with ChatGPT/Codex Desktop `26.901.20858`. Historical wrapper builds were exercised with older Desktop versions, but this release does not claim compatibility with them. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; its main-process Inspector path is awaiting another real-device run and is not yet claimed as a supported GitHub Release asset.
 
 ```sh
 npm run check

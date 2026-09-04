@@ -1,6 +1,13 @@
 #!/usr/bin/env node
-import { access, open as openFile, readFile, readdir } from "node:fs/promises";
-import { accessSync, constants } from "node:fs";
+import {
+  access,
+  mkdtemp,
+  open as openFile,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
+import { accessSync, constants, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
 import { homedir, release as osRelease, tmpdir } from "node:os";
@@ -8,9 +15,11 @@ import { delimiter, dirname, extname, isAbsolute, join, resolve } from "node:pat
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { injectMainProcessHook } from "./lib/main-inspector.mjs";
+import { superviseRenderer } from "./lib/renderer-supervisor.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.2.2.4";
+const APP_VERSION = "26.901.20858";
+const SUPPORTED_DESKTOP_VERSION = "26.901.20858";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -19,6 +28,8 @@ const LOCAL_CLI_SHIM = join(
 const ELECTRON_MAIN_HOOK = join(HERE, "spine-electron-main-hook.cjs");
 const REMOTE_CLI_NAME = "spine-codex";
 const MIN_SPINE_CODEX_VERSION = "0.2.2";
+const MIN_CODEX_APP_SERVER_VERSION = "0.141.0";
+const MIN_SPINE_CODEX_RELEASE = "0.3.3";
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
 const MIN_WINDOWS_VERSION = "10.0.17763";
@@ -90,16 +101,22 @@ const deepLink = args.workspace == null
 const appSearchPath = [LOCAL_CLI_DIR, commandSearchPath]
   .filter(Boolean)
   .join(delimiter);
+const shellEnvironment = process.platform === "darwin"
+  ? await createMacShellEnvironment(LOCAL_CLI_DIR)
+  : {};
 const mainHookOption = process.platform === "win32"
   ? `--require "${ELECTRON_MAIN_HOOK.replaceAll('"', '\\"')}"`
   : `--require ${JSON.stringify(ELECTRON_MAIN_HOOK)}`;
 const nodeOptions = [mainHookOption, process.env.NODE_OPTIONS].filter(Boolean).join(" ");
 const appEnvironment = {
   ...process.env,
+  ...shellEnvironment,
   PATH: appSearchPath,
-  // Remote SSH must receive a portable command name. The verified Electron
-  // hook independently points only the local selector at the private shim, so
-  // a login-shell PATH refresh cannot bypass the output filter.
+  // Current macOS Electron builds disable main-process preload injection. The
+  // supported CODEX_CLI_PATH boundary therefore uses the portable
+  // `spine-codex` name. On macOS our temporary ZDOTDIR puts the private adapter
+  // first for local launches; an SSH host resolves its own real spine-codex.
+  // Windows keeps the previous main-hook selector until it moves to this path.
   CODEX_CLI_PATH: REMOTE_CLI_NAME,
   SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM,
   SPINE_CODEX_BINARY: spineCodex,
@@ -108,7 +125,7 @@ const appEnvironment = {
   SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
   SPINE_CODEX_RENDERER_PATH: join(HERE, "spine-view.js"),
   SPINE_CODEX_RENDERER_SHA256: createHash("sha256").update(SCRIPT).digest("hex"),
-  NODE_OPTIONS: nodeOptions,
+  ...(process.platform === "darwin" ? {} : { NODE_OPTIONS: nodeOptions }),
 };
 const launchedApp = await launchCodexApp({
   appPath,
@@ -136,16 +153,18 @@ if (mainInspectorPort != null) {
   console.log("ready.");
 }
 
-process.stdout.write("Waiting for Codex renderer and main-process hook… ");
-const [target] = await Promise.all([
-  waitForTarget(debugPort),
-  waitForMainHookReady(
-    mainHookStatusPath,
-    process.platform === "win32" ? 20_000 : 5_000,
-  ),
-]);
-await inject(target.webSocketDebuggerUrl, debugPort, SCRIPT);
-console.log("Spine Tree ready.");
+if (process.platform === "win32") {
+  process.stdout.write("Waiting for Codex main-process hook… ");
+  await waitForMainHookReady(mainHookStatusPath, 20_000);
+  console.log("ready.");
+}
+
+process.stdout.write("Waiting for Codex renderer… ");
+await superviseRenderer({
+  port: debugPort,
+  rendererSource: SCRIPT,
+  onReady: () => console.log("Spine Tree ready; monitoring renderer reloads."),
+});
 
 function parseArgs(values) {
   const parsed = {
@@ -280,7 +299,9 @@ async function diagnose(options) {
       LOCAL_CLI_SHIM,
       process.platform === "win32" ? constants.F_OK : constants.X_OK,
     );
-    await access(ELECTRON_MAIN_HOOK, constants.R_OK);
+    if (process.platform === "win32") {
+      await access(ELECTRON_MAIN_HOOK, constants.R_OK);
+    }
     add("ok", "Wrapper files", `${Buffer.byteLength(rendererSource)} byte renderer`);
   } catch (error) {
     add(
@@ -332,11 +353,19 @@ async function diagnose(options) {
             `could not parse version output: ${versionOutput || "(empty)"}`,
             SPINE_CODEX_INSTALL_COMMAND,
           );
-        } else if (compareVersions(parsed, MIN_SPINE_CODEX_VERSION) < 0) {
+        } else if (compareVersions(
+          parsed,
+          process.platform === "darwin"
+            ? MIN_CODEX_APP_SERVER_VERSION
+            : MIN_SPINE_CODEX_VERSION,
+        ) < 0) {
+          const minimum = process.platform === "darwin"
+            ? MIN_CODEX_APP_SERVER_VERSION
+            : MIN_SPINE_CODEX_VERSION;
           add(
             "error",
             "SpineCodex",
-            `${parsed} is older than required ${MIN_SPINE_CODEX_VERSION}`,
+            `${parsed} is older than required ${minimum}`,
             SPINE_CODEX_INSTALL_COMMAND,
           );
         } else {
@@ -375,11 +404,45 @@ async function diagnose(options) {
           throw new Error("the Windows App path must point to an .exe file");
         }
       }
-      nodeOptionsFuse = await readElectronFuse(appPath, NODE_OPTIONS_FUSE_INDEX);
-      nodeCliInspectFuse = await readElectronFuse(
-        appPath,
-        NODE_CLI_INSPECT_FUSE_INDEX,
-      );
+      if (process.platform === "darwin") {
+        const desktopVersion = readMacAppVersion(appPath);
+        const desktopComparison = compareVersions(
+          desktopVersion,
+          SUPPORTED_DESKTOP_VERSION,
+        );
+        if (desktopComparison < 0) {
+          add(
+            "error",
+            "Codex Desktop",
+            `${desktopVersion} is unsupported; this release requires ${SUPPORTED_DESKTOP_VERSION}`,
+            `Install ChatGPT/Codex Desktop ${SUPPORTED_DESKTOP_VERSION}. Older Desktop versions are not supported by this release.`,
+          );
+        } else if (desktopComparison > 0) {
+          add(
+            "info",
+            "Codex Desktop",
+            `${desktopVersion} · unverified with release ${APP_VERSION}`,
+            `Only Desktop ${SUPPORTED_DESKTOP_VERSION} is guaranteed compatible. Install the matching SpineCodex App release when available.`,
+          );
+        } else {
+          add(
+            "ok",
+            "Codex Desktop",
+            `${desktopVersion} · verified exact match · ${appPath}`,
+          );
+        }
+        add(
+          "ok",
+          "CLI compatibility",
+          `external ${REMOTE_CLI_NAME} PATH adapter; no Electron main-process hook required`,
+        );
+      } else {
+        nodeOptionsFuse = await readElectronFuse(appPath, NODE_OPTIONS_FUSE_INDEX);
+        nodeCliInspectFuse = await readElectronFuse(
+          appPath,
+          NODE_CLI_INSPECT_FUSE_INDEX,
+        );
+      }
       if (process.platform === "win32" && nodeCliInspectFuse === "on") {
         add("ok", "Codex Desktop", appPath);
         add(
@@ -403,20 +466,11 @@ async function diagnose(options) {
           "SSH compatibility hook",
           `Inspector fuse marker ${nodeCliInspectFuse}; runtime injection required`,
         );
-      } else if (process.platform === "darwin" && nodeOptionsFuse === "on") {
-        add("ok", "Codex Desktop", appPath);
-        add("ok", "SSH compatibility hook", "Electron NODE_OPTIONS fuse is enabled");
-      } else {
-        const fuseName = process.platform === "win32"
-          ? "main-process Inspector"
-          : "NODE_OPTIONS";
-        const fuseValue = process.platform === "win32"
-          ? nodeCliInspectFuse
-          : nodeOptionsFuse;
+      } else if (process.platform === "win32") {
         add(
           "error",
           "Codex Desktop",
-          `${appPath} has incompatible Electron ${fuseName} fuse: ${fuseValue}`,
+          `${appPath} has incompatible Electron main-process Inspector fuse: ${nodeCliInspectFuse}`,
           `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
         );
       }
@@ -430,7 +484,13 @@ async function diagnose(options) {
     }
   }
 
-  add("info", "Remote requirement", `${REMOTE_CLI_NAME} >= ${MIN_SPINE_CODEX_VERSION} on each SSH host`);
+  add(
+    "info",
+    "Remote requirement",
+    process.platform === "darwin"
+      ? `${REMOTE_CLI_NAME} >= ${MIN_SPINE_CODEX_RELEASE} on each SSH host; no remote adapter required`
+      : `${REMOTE_CLI_NAME} reporting codex-cli >= ${MIN_SPINE_CODEX_VERSION} on each SSH host`,
+  );
   add("info", "Image generation", "disabled for SpineCodex compatibility");
   const ok = checks.every((check) => check.status !== "error");
   return {
@@ -451,6 +511,22 @@ function resolveExecutableOption(value) {
     return resolve(value);
   }
   return findExecutable(value);
+}
+
+function readMacAppVersion(appPath) {
+  const infoPlist = join(appPath, "Contents", "Info.plist");
+  const result = spawnSync(
+    "/usr/bin/plutil",
+    ["-extract", "CFBundleShortVersionString", "raw", "-o", "-", infoPlist],
+    { encoding: "utf8", timeout: 5_000, maxBuffer: 64 * 1024 },
+  );
+  const version = result.stdout?.trim();
+  if (result.status !== 0 || !/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(version ?? "")) {
+    throw new Error(
+      `could not read CFBundleShortVersionString from ${infoPlist}`,
+    );
+  }
+  return version;
 }
 
 function discoverLoginPath() {
@@ -806,6 +882,44 @@ if ($null -eq $running) { exit 1 } else { exit 0 }
   return check.status === 0 && check.stdout.trim() === "true";
 }
 
+async function createMacShellEnvironment(adapterDirectory) {
+  const proxyDirectory = await mkdtemp(join(tmpdir(), "spine-app-shell-"));
+  const originalZdotdir = process.env.ZDOTDIR || homedir();
+  const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+  const quotedProxy = quote(proxyDirectory);
+  const quotedAdapterDirectory = quote(adapterDirectory);
+  const startupFiles = [
+    ".zshenv",
+    ".zprofile",
+    ".zshrc",
+    ".zlogin",
+    ".zlogout",
+  ];
+
+  for (const name of startupFiles) {
+    const originalFile = join(originalZdotdir, name);
+    const sourceOriginal = originalFile === join(proxyDirectory, name)
+      ? ""
+      : `if [[ -r ${quote(originalFile)} ]]; then\n  source ${quote(originalFile)}\nfi\n`;
+    await writeFile(
+      join(proxyDirectory, name),
+      `${sourceOriginal}export ZDOTDIR=${quotedProxy}\n` +
+        `_spine_app_adapter_dir=${quotedAdapterDirectory}\n` +
+        `case ":\${PATH:-}:" in\n` +
+        `  *:"\${_spine_app_adapter_dir}":*) ;;\n` +
+        `  *) export PATH="\${_spine_app_adapter_dir}:\${PATH:-}" ;;\n` +
+        `esac\n` +
+        `unset _spine_app_adapter_dir\n`,
+      "utf8",
+    );
+  }
+
+  process.once("exit", () => {
+    try { rmSync(proxyDirectory, { recursive: true, force: true }); } catch {}
+  });
+  return { ZDOTDIR: proxyDirectory };
+}
+
 async function launchCodexApp({
   appPath,
   deepLink,
@@ -818,31 +932,19 @@ async function launchCodexApp({
     `--remote-debugging-port=${debugPort}`,
   ];
   if (process.platform === "darwin") {
-    const openArguments = [
-      "-n",
-      "--env",
-      `PATH=${appEnvironment.PATH}`,
-      "--env",
-      `CODEX_CLI_PATH=${appEnvironment.CODEX_CLI_PATH}`,
-      "--env",
-      `SPINE_CODEX_LOCAL_CLI_PATH=${appEnvironment.SPINE_CODEX_LOCAL_CLI_PATH}`,
-      "--env",
-      `SPINE_CODEX_BINARY=${appEnvironment.SPINE_CODEX_BINARY}`,
-      "--env",
-      `SPINE_CODEX_SHIM_NODE=${appEnvironment.SPINE_CODEX_SHIM_NODE}`,
-      "--env",
-      `SPINE_CODEX_MIN_VERSION=${appEnvironment.SPINE_CODEX_MIN_VERSION}`,
-      "--env",
-      `SPINE_CODEX_MAIN_HOOK_STATUS=${appEnvironment.SPINE_CODEX_MAIN_HOOK_STATUS}`,
-      "--env",
-      `SPINE_CODEX_RENDERER_PATH=${appEnvironment.SPINE_CODEX_RENDERER_PATH}`,
-      "--env",
-      `SPINE_CODEX_RENDERER_SHA256=${appEnvironment.SPINE_CODEX_RENDERER_SHA256}`,
-      "--env",
-      `NODE_OPTIONS=${appEnvironment.NODE_OPTIONS}`,
-      "-a",
-      appPath,
-    ];
+    const openArguments = ["-n"];
+    for (const name of [
+      "PATH",
+      "ZDOTDIR",
+      "CODEX_CLI_PATH",
+      "SPINE_CODEX_BINARY",
+      "SPINE_CODEX_SHIM_NODE",
+    ]) {
+      if (appEnvironment[name] != null) {
+        openArguments.push("--env", `${name}=${appEnvironment[name]}`);
+      }
+    }
+    openArguments.push("-a", appPath);
     if (deepLink) openArguments.push(deepLink);
     openArguments.push("--args", ...electronArguments);
     const child = spawn("/usr/bin/open", openArguments, { stdio: "inherit" });
@@ -885,31 +987,6 @@ function reservePort() {
   });
 }
 
-async function waitForTarget(port) {
-  const deadline = Date.now() + 20_000;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
-        signal: AbortSignal.timeout(800),
-      });
-      if (!response.ok) throw new Error(`CDP returned HTTP ${response.status}`);
-      const targets = await response.json();
-      const target = targets.find((item) =>
-        item.type === "page" &&
-        typeof item.webSocketDebuggerUrl === "string" &&
-        (item.url?.startsWith("app://") ||
-          item.url?.startsWith("codex://") ||
-          /codex|chatgpt/i.test(item.title ?? "")));
-      if (target) return target;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 150));
-  }
-  throw new Error(`timed out waiting for Codex renderer: ${lastError?.message ?? "no target"}`);
-}
-
 async function waitForMainHookReady(statusPath, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   let lastState = "not reported";
@@ -940,49 +1017,6 @@ async function waitForMainHookReady(statusPath, timeoutMs = 5_000) {
       `(last state: ${lastState}). The Codex Desktop build did not load ` +
       "the main-process preload; no renderer code was injected.",
   );
-}
-
-async function inject(webSocketUrl, port, source) {
-  const url = new URL(webSocketUrl);
-  if (url.protocol !== "ws:" || !["127.0.0.1", "::1"].includes(url.hostname) ||
-      Number(url.port) !== port) {
-    throw new Error("refusing unsafe CDP WebSocket URL");
-  }
-  const socket = new WebSocket(url);
-  await Promise.race([
-    new Promise((resolve, reject) => {
-      socket.addEventListener("open", resolve, { once: true });
-      socket.addEventListener("error", () => reject(new Error("CDP connection failed")), { once: true });
-    }),
-    timeout(4_000, "CDP connection timed out"),
-  ]);
-  let nextId = 0;
-  const command = (method, params) => {
-    const id = ++nextId;
-    socket.send(JSON.stringify({ id, method, params }));
-    return Promise.race([
-      new Promise((resolve, reject) => {
-        const listener = (event) => {
-          const message = JSON.parse(event.data);
-          if (message.id !== id) return;
-          socket.removeEventListener("message", listener);
-          if (message.error) reject(new Error(`${method}: ${JSON.stringify(message.error)}`));
-          else resolve(message.result);
-        };
-        socket.addEventListener("message", listener);
-      }),
-      timeout(4_000, `${method} timed out`),
-    ]);
-  };
-  await command("Page.enable", {});
-  await command("Page.addScriptToEvaluateOnNewDocument", { source });
-  const result = await command("Runtime.evaluate", { expression: source, returnByValue: true });
-  socket.close();
-  if (result?.exceptionDetails) throw new Error("renderer injection raised an exception");
-}
-
-function timeout(milliseconds, message) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds));
 }
 
 function fail(message) {

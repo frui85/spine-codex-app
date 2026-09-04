@@ -2,9 +2,9 @@
 
 > **简体中文** · [English](FEATURES.md)
 
-本文记录 SpineCodex App v0.2.2.4 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v26.901.20858 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
-本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
+本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex 或重签官方 App。macOS 启动器只为监护 Renderer 的回环 CDP target 而随 App 常驻。
 
 作为当前 `image_gen.imagegen` 不兼容问题的临时规避措施，App 后端会使用 `--disable image_generation` 启动现有 SpineCodex 二进制。它不会修改 provider、App 安装、会话数据库或 SpineCodex 安装。
 
@@ -15,7 +15,7 @@ node spine-app.mjs --diagnose
 node spine-app.mjs /path/to/workspace
 ```
 
-启动前必须完整退出 Codex Desktop。包装层使用随机的、仅限回环地址的 CDP 端口，验证 Renderer WebSocket，为初始目标注册 Renderer，完成区域注入后退出。经过验证的 Electron main hook 会独立保留窄范围的 `web-contents-created` 和 `did-finish-load` 监听器。它先对 `spine-view.js` 做 SHA-256 校验，然后在每次主区域加载完成时重新读取同一绝对资源路径。当前源码只会在精确的 `app://-/index.html` 区域执行，因此 Renderer 崩溃、重新加载或 BrowserWindow 替换都不会恢复过期的内存内 revision，也不需要启动器守护。完整 App 进程重启仍必须再次通过包装层启动。
+启动前必须完整退出 Codex Desktop。包装层使用随机的、仅限回环地址的 CDP 端口，验证 Renderer WebSocket，并且只连接精确的 `app://-/index.html` target（排除 avatar overlay）。它为新文档注册 `spine-view.js`，执行带 guard 的首次注入，在 load 事件后恢复，并在 Electron 替换 target 时重新附着。App 的 CDP endpoint 消失后启动器退出。完整 App 进程重启仍必须再次通过包装层启动。
 
 在 Windows 上，便携包会根据稳定的 `OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0` package family 和 AppX manifest 定位已安装的 Electron 可执行文件，不依赖本地化的开始菜单显示名称。原生 GUI 启动器直接启动该文件，使限定作用域的 `CODEX_CLI_PATH`、`NODE_OPTIONS` 和回环 CDP 参数进入新进程。第二个原生可执行文件把 Codex 后端启动适配到外部安装的 npm `spine-codex.cmd`。这两个文件都是由本仓库构建的轻量 shim，不包含 SpineCodex。Windows 包必须保持目录完整，因为私有 Node 运行时和包装层文件都按相对启动器的路径解析。
 
@@ -23,31 +23,21 @@ AppX 可执行文件可能只是打包启动器，而不是携带 fuse wire 的 
 
 ## 远程 SSH 主机
 
-对于 Codex App SSH 连接，包装层会让 App 探测并启动远程命令 **`spine-codex`**，而不是 **`codex`**。远程发现、`--version`、app-server 启动、app-server 代理和清理始终使用同一命令名。包装层不会写入 `~/.ssh/config`，也不会把本地绝对路径发送到服务器；远程登录 shell 从自己的 `PATH` 解析 `spine-codex`。
+`CODEX_CLI_PATH` 始终保持便携命令名 **`spine-codex`**。macOS 上，临时 `ZDOTDIR` 代理先执行用户真实的 zsh 启动文件，再把包装层 `bin` 放到 PATH 首位。本地登录 shell 因而解析到包装层私有协议适配器，由它启动单独安装、未经修改的 SpineCodex；启动器退出时代理目录会被删除。
 
-远程 SSH 的 `CODEX_CLI_PATH` 始终保持便携命令名 `spine-codex`。本地环境中，经过验证的 Electron hook 通过独立的 `SPINE_CODEX_LOCAL_CLI_PATH` 绝对路径，把 Desktop 本地 CLI selector 指向包装层私有 shim。即使 Desktop 从登录 shell 刷新 `PATH`，这个选择仍是确定的。随后 shim 使用安装包内 Node 运行时调用发现到的 SpineCodex 二进制，使 app-server 输出过滤器始终位于本地进程链中。远程 selector 保持不变，永远不会收到本地绝对路径。
+原生 SSH 的远端登录 shell 没有包装层 PATH，因此同一个命令名会直接解析为该主机自己的 SpineCodex。不需要在远端安装 adapter，不传输本机绝对路径，也不修改 `~/.ssh/config`。
 
-每台远程主机都需要安装 SpineCodex `0.2.2` 或更高版本，并确认以下命令能在非交互登录 shell 中工作：
+每台远程主机都需要安装 SpineCodex `0.3.3` 或更高版本，并确认以下命令能在非交互登录 shell 中工作：
 
 ```sh
 ssh <host> 'command -v spine-codex && spine-codex --version'
 ```
 
-Codex Desktop 当前把 CLI `0.141.0` 视为上游最低版本。一个轻量 Electron main preload 会在保留 App 原始接受规则的同时，把兼容性检查扩展到 SpineCodex `0.2.2` 或更高版本。它根据稳定的“不支持版本”错误前缀和比较器结构识别 `src-*` 版本 bundle，而不是依赖 `wc`、`mc` 等生成的导出名。
-
-同一个 preload 根据稳定的二进制缺失错误文本和 selector 结构识别本地 CLI selector。它只修改共享 `src-*` bundle 中的本地 selector；遇到未知结构时，会在 Desktop 启动被报告为 ready 前 fail closed。
-
-preload 还根据固定的 `desktop-ssh-websocket-v0.sock` marker 识别 SSH bootstrap，并只替换该 bootstrap 的生命周期片段。Codex 通常只在陈旧服务的可执行文件名与新选 CLI 一致时才结束该服务，因此之前由官方 `codex` 启动的服务可能在切换到 `spine-codex` 后继续存在，并被静默复用。
-
-替代逻辑是按用户隔离的幂等状态机。远程 `app-server-control` 目录下的原子锁会串行处理并发重连。真实 Unix socket 连接探测结合 `/proc` 祖先链识别健康的 SpineCodex 服务，并在不中断的情况下复用。陈旧 socket 或者进程祖先链并非 SpineCodex 的健康服务会被替换。在发送 TERM 或 KILL 前，会先检查 `fuser` 返回的 PID 是否属于当前登录 UID，即使 SSH 账户拥有高权限也不例外。后备逻辑将 `pgrep -U "$(id -u)"` 与行首锚定的可执行文件模式组合，避免只包含 payload 文本的 shell 被误匹配。普通 Codex CLI 会话、显式 listen 地址和其他用户的进程都不在目标范围内。
-
-启动后，bootstrap 会保留进程 PID，并要求连续两次 socket 连接成功才向 Codex Desktop 返回成功。进程过早退出或就绪超时会返回远程 app-server 日志，而不是让代理稍后以不透明的 `socket hang up` 失败。
-
-preload 只在 Electron 浏览器主线程中运行。main chunk 和版本 chunk 可以按任意顺序加载，因此两个目标都按内容独立识别；worker、Renderer 和 utility 进程不会被修改。两项补丁验证完成后，loader hook 会被移除，一次性状态握手允许启动器继续。Renderer 恢复事件监听器会继续存在，但只在主 `app://-/index.html` 区域完成加载时工作，不执行轮询。未知结构、Renderer 恢复注册缺失或 Renderer hash 不匹配都会以明确启动错误 fail closed。不会修改任何 `app.asar` 文件或 App 签名。
+Codex Desktop 当前把 CLI `0.141.0` 视为上游最低版本。SpineCodex 0.3.3 会报告上游兼容的 `codex-cli 0.147.0`，无需 patch Desktop 即可通过门禁。包装层不会伪造版本；报告 `0.2.2` 的旧 SpineCodex 会在这条 macOS 路径上被明确拒绝。
 
 兼容性门禁会如实解析 SpineCodex 的 `--version` 输出。原生连接卡片仍可能显示类似 `0.144.6` 的上游 core/app-server 版本，因为该值来自已连接 app-server 的 initialize 握手，而不是 CLI 探测。这不代表远程可执行文件是官方 Codex；实际 SSH 命令和进程身份才是判断后端的权威依据。
 
-如果远程主机没有 `spine-codex`，App 原生的 CLI 缺失页面仍会调用官方 Codex 安装器。不要为本包装层使用该安装器；请在远程主机安装 SpineCodex 后重新连接。由于 SSH 命令选择和最低版本检查位于 Electron 主进程中，该功能要求完整退出 App，并通过 `spine-app.mjs` 重新启动；仅对 Renderer 热注入无法启用。
+如果远程主机没有 `spine-codex`，App 原生的 CLI 缺失页面仍可能调用官方 Codex 安装器。不要为本包装层使用该安装器；请在远程主机安装 SpineCodex 后重新连接。需要完整退出 App 并通过 `spine-app.mjs` 重新启动，才能重新建立便携 CLI 选择和 Renderer supervisor。
 
 Spine Tree 是 Codex 摘要卡片的第一个区域。窗口变窄时，它会遵循 Codex 自己的响应式行为：点击右上角工具栏中的原生 **Toggle summary** 按钮显示卡片。当工作区边栏占据右侧时，Codex 会把卡片从固定面板切换为浮动 Radix popover。包装层能识别两种原生区域：优先使用 Codex 的结构化 summary 属性，同时支持旧的 marker-owned content 和新的 marker sibling，并在原生 summary marker 周围使用有界的重叠/区域布局探测作为后备。它会在浏览器绘制前把同一个 Spine Tree 实例移动到目标位置，不会复制任务树，不依赖翻译后的按钮文本或生成 class 名，也不会假设窄窗口中 300 px 的浮动卡片必须从右半边开始。点击顶部工具栏布局控件时，只在 Codex 创建或切换浮动区域的三秒有界窗口内启用观察器；任务树挂载后立即断开，绝不会成为永久整页观察器。点击 Spine Tree 标题只折叠或展开该区域。
 

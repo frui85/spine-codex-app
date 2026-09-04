@@ -24,13 +24,13 @@ function validate(tag) {
 }
 
 test("release tag must match the wrapper source version", () => {
-  const accepted = validate("v0.2.2.4");
+  const accepted = validate("v26.901.20858");
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(accepted.stdout.trim(), "0.2.2.4");
+  assert.equal(accepted.stdout.trim(), "26.901.20858");
 
-  const rejected = validate("v0.2.2");
+  const rejected = validate("v0.2.2.4");
   assert.notEqual(rejected.status, 0);
-  assert.match(rejected.stderr, /does not match source version v0\.2\.2\.4/);
+  assert.match(rejected.stderr, /does not match source version v26\.901\.20858/);
 });
 
 test("active release workflow is tag-driven and publishes macOS only", () => {

@@ -239,7 +239,7 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.2.2.4");
+assert.equal(api.version, "26.901.20858");
 assert.equal(api.revision, 11);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
@@ -1140,7 +1140,7 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.2.2.4");
+assert.equal(restoredApi.version, "26.901.20858");
 assert.equal(restoredApi.revision, 11);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(

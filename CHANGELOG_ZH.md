@@ -4,6 +4,21 @@
 
 ## 尚未发布
 
+## v26.901.20858 - 2026-09-05
+
+对应 ChatGPT/Codex Desktop `26.901.20858` 的 macOS 精确版本发布。低于
+`26.901.20858` 的 Desktop 不受支持；高于该版本未经验证且不保证兼容；本次
+发布只对版本号完全相等的情况提供兼容保证。
+
+- 恢复对 macOS ChatGPT `26.901.20858` 的兼容，不再依赖 Electron
+  `NODE_OPTIONS` 或主进程 Inspector fuse。Desktop 完成登录 shell 环境加载后，
+  正常的 `CODEX_CLI_PATH=spine-codex` 会在本机解析到私有适配器；SSH 主机仍
+  直接解析各自未经修改的 `spine-codex`。
+- 让仅限回环地址的 CDP supervisor 与 ChatGPT 同时运行，在页面 reload 或
+  target 被替换后恢复 Spine Renderer。
+- 当前 macOS 路径最低要求 SpineCodex 0.3.3；该版本会报告当前 Desktop
+  接受的上游兼容 app-server 版本。
+
 ## v0.2.2.4 - 2026-08-11
 
 仅包装层修订；最低支持的 SpineCodex 版本仍为 0.2.2。

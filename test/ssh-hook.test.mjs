@@ -281,24 +281,14 @@ assert.match(wrapperSource, /CODEX_CLI_PATH: REMOTE_CLI_NAME/);
 assert.match(wrapperSource, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
 assert.match(wrapperSource, /PATH: appSearchPath/);
 assert.match(wrapperSource, /NODE_OPTIONS: nodeOptions/);
-assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
-assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
+assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION/);
+assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_PATH:/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_SHA256:/);
 assert.match(wrapperSource, /SPINE_CODEX_SHIM_NODE: process\.execPath/);
-assert.match(
-  wrapperSource,
-  /`SPINE_CODEX_LOCAL_CLI_PATH=\$\{appEnvironment\.SPINE_CODEX_LOCAL_CLI_PATH\}`/,
-);
-assert.match(
-  wrapperSource,
-  /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
-);
-assert.match(wrapperSource, /rendererRecovery !== true/);
-assert.match(
-  wrapperSource,
-  /waitForMainHookReady\(\s*mainHookStatusPath,\s*process\.platform === "win32" \? 20_000 : 5_000,/,
-);
+assert.match(wrapperSource, /await createMacShellEnvironment\(LOCAL_CLI_DIR\)/);
+assert.match(wrapperSource, /await superviseRenderer\(/);
+assert.match(wrapperSource, /waitForMainHookReady\(mainHookStatusPath, 20_000\)/);
 assert.match(wrapperSource, /--require \$\{JSON\.stringify\(ELECTRON_MAIN_HOOK\)\}/);
 assert.match(wrapperSource, /--require "\$\{ELECTRON_MAIN_HOOK/);
 assert.match(wrapperSource, /readElectronFuse/);
