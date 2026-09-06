@@ -2,7 +2,7 @@
 
 > [简体中文](FEATURES_ZH.md) · **English**
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.4. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v0.3.3.5. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -70,6 +70,20 @@ closes that connection. The renderer is still injected only after the hook
 writes a verified `ready` handshake for both required bundle structures. A
 known-disabled Node CLI Inspector fuse is a hard preflight failure; an unreadable
 packaged-launcher fuse is resolved authoritatively by the runtime injection.
+
+Current macOS Desktop builds disable the same fuse inside the signed bundle. The
+launcher then prepares a private inspectable clone: an APFS `clonefile` copy of
+the installed bundle under
+`~/Library/Application Support/SpineCodex App/inspectable-desktop/`, with exactly
+one fuse byte (`nodeCliInspect`) re-enabled, provisioning-only entitlements
+(`application-identifier`, `keychain-access-groups`, `application-groups`,
+`com.apple.developer.*`) left out, hardened-runtime ad-hoc signatures applied
+inside out, and `codesign --verify --deep --strict` required before launch. The
+clone starts with `--inspect-brk` on a loopback-only port and is injected exactly
+like the Windows path. It is rebuilt whenever the installed bundle changes, never
+reused once its fuse is no longer enabled, and never replaces the original
+`ChatGPT.app`. `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1` opts out and restores the
+fail-closed preflight error; `SPINE_CODEX_DESKTOP_CLONE_ROOT` relocates the clone.
 
 ## Remote SSH hosts
 

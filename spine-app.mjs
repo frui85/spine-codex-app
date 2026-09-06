@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, open as openFile, readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { accessSync, constants } from "node:fs";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
@@ -17,6 +17,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { inspectDesktopBundleContract } from "./lib/desktop-bundle-contract.mjs";
 import { injectMainProcessHook } from "./lib/main-inspector.mjs";
+import {
+  CLONE_DISABLE_ENV,
+  isCloneDisabled,
+  prepareInspectableDesktopClone,
+  readFuseState,
+  resolveCloneRoot,
+} from "./lib/macos-inspector-clone.mjs";
 import { waitForMainHookReady } from "./lib/main-hook-readiness.mjs";
 import {
   compareVersions,
@@ -26,7 +33,7 @@ import {
 } from "./lib/spine-codex-compatibility.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.3.3.4";
+const APP_VERSION = "0.3.3.5";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -42,18 +49,20 @@ const VALIDATED_DESKTOP_VERSIONS = [
   "26.818.41509",
   "26.825.51511",
   "26.901.20858",
+  "26.901.51231",
 ];
 const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
 const MIN_WINDOWS_VERSION = "10.0.17763";
 const CODEX_DOWNLOAD_URL = "https://chatgpt.com/download/";
 const SPINE_CODEX_INSTALL_COMMAND = "npm install -g @spinejit/spine-codex@latest";
-const ELECTRON_FUSE_SENTINEL = Buffer.from(
-  "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX",
-  "ascii",
-);
 const NODE_OPTIONS_FUSE_INDEX = 2;
 const NODE_CLI_INSPECT_FUSE_INDEX = 3;
+// The first execution of a freshly signed Desktop clone waits for AMFI to
+// validate the ad-hoc signed Electron framework before the paused main
+// process opens its Inspector; that took about 7 s on Apple silicon, so the
+// budget leaves room for slower disks and Intel machines.
+const MAIN_INSPECTOR_TIMEOUT_MS = 60_000;
 const args = parseArgs(process.argv.slice(2));
 
 if (args.help) {
@@ -147,8 +156,30 @@ const appEnvironment = {
     createHash("sha256").update(RENDERER_SOURCE).digest("hex"),
   NODE_OPTIONS: nodeOptions,
 };
+let launchAppPath = appPath;
+if (diagnosis.inspectableClone?.required) {
+  process.stdout.write("Preparing inspectable Codex Desktop clone… ");
+  const startedAt = Date.now();
+  try {
+    const clone = await prepareInspectableDesktopClone({
+      appPath,
+      cloneRoot: diagnosis.inspectableClone.root,
+    });
+    launchAppPath = clone.appPath;
+    console.log(
+      clone.reused
+        ? "reused."
+        : `created in ${((Date.now() - startedAt) / 1000).toFixed(1)}s.`,
+    );
+  } catch (error) {
+    fail(
+      "could not prepare an inspectable Codex Desktop clone; Codex was not " +
+        `started: ${error.message}`,
+    );
+  }
+}
 const launchedApp = await launchCodexApp({
-  appPath,
+  appPath: launchAppPath,
   deepLink,
   debugPort,
   mainInspectorPort,
@@ -163,7 +194,7 @@ if (mainInspectorPort != null) {
       fallbackPorts: process.platform === "darwin" ? [9229] : [],
       expectedPid: launchedApp?.pid ?? null,
       hookPath: ELECTRON_MAIN_HOOK,
-      timeoutMs: 15_000,
+      timeoutMs: MAIN_INSPECTOR_TIMEOUT_MS,
     });
   } catch (error) {
     fail(
@@ -468,6 +499,7 @@ async function diagnose(options) {
   let nodeCliInspectFuse = null;
   let desktopVersion = null;
   let bundleContract = null;
+  let inspectableClone = null;
   let desktopValidated = false;
   if (!appPath) {
     add(
@@ -524,13 +556,34 @@ async function diagnose(options) {
         ["off", "removed"].includes(nodeCliInspectFuse)
       ) {
         add("ok", "Codex Desktop", appPath);
-        add(
-          "error",
-          "SSH compatibility hook",
-          `Electron main-process Inspector fuse is ${nodeCliInspectFuse}; ` +
-            "this Desktop build blocks --inspect* and SIGUSR1",
-          `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
-        );
+        if (isCloneDisabled(process.env)) {
+          add(
+            "error",
+            "SSH compatibility hook",
+            `Electron main-process Inspector fuse is ${nodeCliInspectFuse}; ` +
+              "this Desktop build blocks --inspect* and SIGUSR1, and " +
+              `${CLONE_DISABLE_ENV} disables the inspectable clone`,
+            `Unset ${CLONE_DISABLE_ENV}, or install a supported current build from ${CODEX_DOWNLOAD_URL}`,
+          );
+        } else {
+          const cloneRoot = resolveCloneRoot(process.env);
+          inspectableClone = {
+            required: true,
+            root: cloneRoot,
+            path: join(cloneRoot, basename(appPath)),
+            fuse: "nodeCliInspect",
+            signing: "ad-hoc",
+          };
+          add(
+            "info",
+            "SSH compatibility hook",
+            `Electron main-process Inspector fuse is ${nodeCliInspectFuse}; ` +
+              "this Desktop build blocks --inspect* and SIGUSR1, so a private " +
+              `inspectable clone (${inspectableClone.path}) is launched with ` +
+              "that fuse re-enabled and an ad-hoc signature; the original " +
+              "bundle stays unmodified",
+          );
+        }
       } else if (process.platform === "darwin") {
         add("ok", "Codex Desktop", appPath);
         add(
@@ -604,6 +657,7 @@ async function diagnose(options) {
     nodeCliInspectFuse,
     desktopVersion,
     bundleContract,
+    inspectableClone,
     versionOutput,
     versionIdentity,
     appsProtocol,
@@ -752,6 +806,7 @@ function printDiagnosisJson(diagnosis, { stream = process.stdout } = {}) {
       nodeOptionsFuse: diagnosis.nodeOptionsFuse,
       nodeCliInspectFuse: diagnosis.nodeCliInspectFuse,
       bundleContract: diagnosis.bundleContract,
+      inspectableClone: diagnosis.inspectableClone,
     },
     renderer: diagnosis.rendererInfo,
     remote: { minimumSpineCodexVersion: MIN_SPINE_CODEX_VERSION },
@@ -805,10 +860,14 @@ async function findApp() {
       if (candidate.trim()) candidates.push(candidate.trim());
     }
   }
+  const cloneRoot = resolveCloneRoot(process.env);
   const seen = new Set();
   for (const candidate of candidates) {
     if (seen.has(candidate)) continue;
     seen.add(candidate);
+    // The private inspectable clone shares the Desktop bundle identifier, so
+    // Spotlight may list it; only the official installation is a launch source.
+    if (candidate === cloneRoot || candidate.startsWith(`${cloneRoot}/`)) continue;
     try {
       await access(candidate, constants.R_OK);
       return candidate;
@@ -966,44 +1025,7 @@ async function readElectronFuse(applicationPath, fuseIndex) {
 }
 
 async function readElectronFuseFromBinary(binaryPath, fuseIndex) {
-  const handle = await openFile(binaryPath, "r");
-  const chunkSize = 1024 * 1024;
-  const overlapSize = ELECTRON_FUSE_SENTINEL.length + 2 + 32;
-  let overlap = Buffer.alloc(0);
-  let position = 0;
-  try {
-    while (true) {
-      const chunk = Buffer.allocUnsafe(chunkSize);
-      const { bytesRead } = await handle.read(chunk, 0, chunk.length, position);
-      if (bytesRead === 0) break;
-      position += bytesRead;
-      const window = Buffer.concat([overlap, chunk.subarray(0, bytesRead)]);
-      const sentinelIndex = window.indexOf(ELECTRON_FUSE_SENTINEL);
-      if (sentinelIndex >= 0) {
-        const header = sentinelIndex + ELECTRON_FUSE_SENTINEL.length;
-        if (window.length < header + 2) {
-          overlap = window.subarray(sentinelIndex);
-          continue;
-        }
-        const schema = window[header];
-        const count = window[header + 1];
-        if (schema !== 1 || count <= fuseIndex) return "unsupported";
-        if (window.length < header + 2 + count) {
-          overlap = window.subarray(sentinelIndex);
-          continue;
-        }
-        const value = window[header + 2 + fuseIndex];
-        return value === 0x31 ? "on" :
-          value === 0x30 ? "off" :
-          value === 0x32 ? "removed" :
-          value === 0x33 ? "inherit" : "unknown";
-      }
-      overlap = window.subarray(Math.max(0, window.length - overlapSize));
-    }
-  } finally {
-    await handle.close();
-  }
-  return "not-found";
+  return readFuseState(binaryPath, fuseIndex);
 }
 
 function isAppRunning(applicationPath) {
@@ -1050,9 +1072,13 @@ async function launchCodexApp({
   if (process.platform === "darwin") {
     if (mainInspectorPort != null) {
       const executable = resolveMacOsExecutable(appPath);
+      // The launched bundle is either a Desktop build whose Node CLI inspect
+      // fuse is enabled or the private inspectable clone prepared above, so
+      // `--inspect-brk` pauses the main process before its first script and
+      // the hook is loaded through the loopback Inspector before it resumes.
       const child = spawn(executable, [
         ...electronArguments,
-        `--inspect-port=127.0.0.1:${mainInspectorPort}`,
+        `--inspect-brk=127.0.0.1:${mainInspectorPort}`,
         ...(deepLink ? [deepLink] : []),
       ], {
         cwd: dirname(executable),
@@ -1064,16 +1090,6 @@ async function launchCodexApp({
         child.once("spawn", resolve);
         child.once("error", reject);
       });
-      // Current macOS Desktop builds may disable Electron's Node CLI inspect
-      // fuse, which makes --inspect-brk a no-op. SIGUSR1 is the supported Node
-      // runtime trigger for enabling the Inspector after process start. The
-      // Electron launcher can take longer than one event-loop turn to hand off
-      // to the real main process, so pulse SIGUSR1 over a short bounded window;
-      // repeated SIGUSR1 calls are idempotent once the Inspector is active.
-      for (const milliseconds of [50, 250, 750, 1_500]) {
-        await delay(milliseconds);
-        try { child.kill("SIGUSR1"); } catch {}
-      }
       child.unref();
       return child;
     }
@@ -1222,10 +1238,6 @@ async function inject(webSocketUrl, port, source) {
 
 function timeout(milliseconds, message) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds));
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function fail(message) {

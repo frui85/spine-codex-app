@@ -128,6 +128,10 @@ async function build(architecture) {
     join(ROOT, "lib", "desktop-bundle-contract.mjs"),
     join(wrapper, "lib", "desktop-bundle-contract.mjs"),
   );
+  await copyFile(
+    join(ROOT, "lib", "macos-inspector-clone.mjs"),
+    join(wrapper, "lib", "macos-inspector-clone.mjs"),
+  );
   await chmod(join(wrapper, "bin", "spine-codex"), 0o755);
 
   await writeFile(join(macos, BUNDLE_NAME), appLauncher(), { mode: 0o755 });

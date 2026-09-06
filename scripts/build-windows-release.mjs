@@ -105,6 +105,10 @@ await copyFile(
   join(ROOT, "lib", "desktop-bundle-contract.mjs"),
   join(wrapper, "lib", "desktop-bundle-contract.mjs"),
 );
+await copyFile(
+  join(ROOT, "lib", "macos-inspector-clone.mjs"),
+  join(wrapper, "lib", "macos-inspector-clone.mjs"),
+);
 await copyFile(join(ROOT, "LICENSE"), join(releaseRoot, "LICENSE"));
 await copyFile(join(ROOT, "NOTICE"), join(releaseRoot, "NOTICE"));
 await writeFile(join(releaseRoot, "README-Windows.txt"), windowsReadme());

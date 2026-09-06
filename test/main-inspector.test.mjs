@@ -93,6 +93,59 @@ test("enables a runtime Inspector after a fuse-off style launch", async () => {
   }
 });
 
+test("shares the Inspector wait deadline across candidate ports", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "spine inspector deadline "));
+  const hookPath = join(directory, "probe.cjs");
+  await writeFile(
+    hookPath,
+    'globalThis.__spineInspectorProbe = "late-injected";\n',
+    "utf8",
+  );
+  const port = await reservePort();
+  const fallbackPort = await reservePort();
+  const child = spawn(process.execPath, [
+    `--inspect-brk=127.0.0.1:${port}`,
+    "-e",
+    'console.log(globalThis.__spineInspectorProbe ?? "missing")',
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  const stdout = [];
+  const stderr = [];
+  child.stdout.on("data", (chunk) => stdout.push(chunk));
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+  // The endpoint stays unreachable for longer than a per-port share of the
+  // budget, as when AMFI validates a freshly signed clone before it listens.
+  const reachableAt = Date.now() + 3_000;
+  const probedPorts = new Set();
+  const fetchImpl = (url, options) => {
+    probedPorts.add(Number(new URL(url).port));
+    if (Date.now() < reachableAt) return Promise.reject(new Error("fetch failed"));
+    return fetch(url, options);
+  };
+
+  try {
+    const result = await injectMainProcessHook({
+      port,
+      fallbackPorts: [fallbackPort],
+      expectedPid: child.pid,
+      hookPath,
+      timeoutMs: 5_000,
+      fetchImpl,
+    });
+    assert.equal(result.loaded, true);
+    assert.equal(probedPorts.has(port), true);
+    assert.equal(probedPorts.has(fallbackPort), true);
+    const status = await new Promise((resolve, reject) => {
+      child.once("exit", resolve);
+      child.once("error", reject);
+    });
+    assert.equal(status, 0, Buffer.concat(stderr).toString());
+    assert.equal(Buffer.concat(stdout).toString().trim(), "late-injected");
+  } finally {
+    if (child.exitCode == null) child.kill();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejects a non-loopback or wrong-port Inspector target", () => {
   assert.throws(
     () => validateInspectorWebSocketUrl("ws://192.0.2.1:9229/id", 9229),

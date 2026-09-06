@@ -39,10 +39,14 @@ const appServerProtocolAdapter = await readFile(
   new URL("lib/app-server-protocol-adapter.mjs", root),
   "utf8",
 );
+const inspectorClone = await readFile(
+  new URL("lib/macos-inspector-clone.mjs", root),
+  "utf8",
+);
 
-test("wrapper 0.3.3.4 separates minimum, recommended, and compatibility identities", () => {
+test("wrapper 0.3.3.5 separates minimum, recommended, and compatibility identities", () => {
   assert.equal(metadata.version, "0.3.3");
-  assert.equal(metadata.spineAppVersion, "0.3.3.4");
+  assert.equal(metadata.spineAppVersion, "0.3.3.5");
   assert.equal(metadata.minimumSpineCodexVersion, "0.2.2");
   assert.equal(metadata.recommendedSpineCodexVersion, "0.3.3");
   assert.equal(metadata.validatedCodexCompatibilityVersion, "0.147.0");
@@ -51,12 +55,13 @@ test("wrapper 0.3.3.4 separates minimum, recommended, and compatibility identiti
     "26.818.41509",
     "26.825.51511",
     "26.901.20858",
+    "26.901.51231",
   ]);
-  assert.match(launcher, /APP_VERSION = "0\.3\.3\.4"/);
+  assert.match(launcher, /APP_VERSION = "0\.3\.3\.5"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
   assert.match(launcher, /RECOMMENDED_SPINE_CODEX_VERSION = "0\.3\.3"/);
   assert.match(launcher, /VALIDATED_CODEX_COMPATIBILITY_VERSION = "0\.147\.0"/);
-  assert.match(renderer, /VERSION = "0\.3\.3\.4"/);
+  assert.match(renderer, /VERSION = "0\.3\.3\.5"/);
   assert.equal(compatibility.spineCodexAppVersion, metadata.spineAppVersion);
   assert.deepEqual(compatibility.local, {
     minimumSpineCodexVersion: metadata.minimumSpineCodexVersion,
@@ -78,14 +83,30 @@ test("wrapper 0.3.3.4 separates minimum, recommended, and compatibility identiti
   });
 });
 
-test("launcher keeps its macOS inspector startup delay self-contained", () => {
-  assert.match(launcher, /for \(const milliseconds of \[50, 250, 750, 1_500\]\)/);
-  assert.match(launcher, /await delay\(milliseconds\);/);
-  assert.match(launcher, /child\.kill\("SIGUSR1"\)/);
-  assert.match(
-    launcher,
-    /function delay\(milliseconds\) \{\s*return new Promise\(\(resolve\) => setTimeout\(resolve, milliseconds\)\);\s*\}/s,
-  );
+test("launcher prepares a private inspectable clone when the macOS Inspector fuse is off", () => {
+  assert.match(launcher, /from "\.\/lib\/macos-inspector-clone\.mjs"/);
+  assert.match(launcher, /prepareInspectableDesktopClone\(\{/);
+  assert.match(launcher, /diagnosis\.inspectableClone\?\.required/);
+  assert.match(launcher, /appPath: launchAppPath,/);
+  assert.match(launcher, /`--inspect-brk=127\.0\.0\.1:\$\{mainInspectorPort\}`/);
+  assert.match(launcher, /isCloneDisabled\(process\.env\)/);
+  assert.match(launcher, /bundle stays unmodified/);
+  assert.match(launcher, /could not prepare an inspectable Codex Desktop clone/);
+  assert.match(launcher, /inspectableClone: diagnosis\.inspectableClone/);
+  assert.match(launcher, /candidate\.startsWith\(`\$\{cloneRoot\}\/`\)/);
+  assert.doesNotMatch(launcher, /SIGUSR1"\)/);
+  assert.doesNotMatch(launcher, /--inspect-port=/);
+  assert.doesNotMatch(launcher, /function delay\(/);
+  assert.match(builder, /lib", "macos-inspector-clone\.mjs/);
+  assert.match(windowsBuilder, /lib", "macos-inspector-clone\.mjs/);
+  assert.match(inspectorClone, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
+  assert.match(inspectorClone, /"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX"/);
+  assert.match(inspectorClone, /\["removed", 0x72\]/);
+  assert.match(inspectorClone, /"--verify", "--deep", "--strict"/);
+  assert.match(inspectorClone, /"--options",\s*"runtime"/);
+  assert.match(inspectorClone, /RESTRICTED_ENTITLEMENT_PREFIX = "com\.apple\.developer\."/);
+  assert.match(inspectorClone, /\["-c", "-R", source, destination\]/);
+  assert.match(inspectorClone, /inspectable-desktop/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
@@ -156,7 +177,6 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(appServerProtocolAdapter, /APP_READ_METHOD = "app\/read"/);
   assert.match(appServerProtocolAdapter, /APP_LIST_METHOD = "app\/list"/);
   assert.match(launcher, /--inspect-brk=127\.0\.0\.1:/);
-  assert.match(launcher, /--inspect-port=127\.0\.0\.1:/);
   assert.match(launcher, /injectMainProcessHook/);
   assert.match(launcher, /needsMainProcessInspector/);
   assert.match(launcher, /resolveMacOsExecutable/);

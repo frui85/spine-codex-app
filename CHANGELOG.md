@@ -4,6 +4,31 @@
 
 ## Unreleased
 
+## v0.3.3.5 — 2026-09-06
+
+App-only startup fix for Codex Desktop `26.901.51231`, which ships with the
+Electron `nodeOptions` and `nodeCliInspect` fuses disabled.
+
+- Prepares a private inspectable clone of the installed Desktop bundle when its
+  Inspector fuse is off: an APFS clone under
+  `~/Library/Application Support/SpineCodex App/inspectable-desktop/` with only
+  the `nodeCliInspect` fuse re-enabled and a hardened-runtime ad-hoc signature.
+  The original `ChatGPT.app` is never modified.
+- Launches that clone paused on a loopback-only `--inspect-brk` port and loads
+  the main-process hook before its first script resumes; the ineffective
+  `SIGUSR1` fallback is removed.
+- Rebuilds the clone whenever the installed Desktop changes, refuses to reuse a
+  clone whose fuse is no longer enabled, and keeps the previous fail-closed
+  preflight error behind `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1`.
+- Adds `26.901.51231` to the validated Desktop matrix and decodes `removed`
+  fuse markers correctly.
+- Waits up to 60 s for the clone's loopback Inspector and shares that deadline
+  across the primary and fallback ports: the first execution of a freshly
+  signed clone spends several seconds in AMFI validation of the Electron
+  framework before the paused main process listens.
+- Reads scalar `Info.plist` values such as `CFBundleShortVersionString` through
+  `plutil`'s raw formatter, so the clone manifest records the Desktop version.
+
 ## v0.3.3.4 — 2026-09-03
 
 App-only startup fix for current Codex Desktop builds with Electron Inspector

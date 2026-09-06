@@ -4,6 +4,25 @@
 
 ## 尚未发布
 
+## v0.3.3.5 - 2026-09-06
+
+修复 Codex Desktop `26.901.51231` 下的 App 启动失败：该构建同时关闭了 Electron
+`nodeOptions` 与 `nodeCliInspect` fuse。
+
+- 已安装 Desktop 的 Inspector fuse 关闭时，准备一份私有的可注入克隆：用 APFS
+  克隆到 `~/Library/Application Support/SpineCodex App/inspectable-desktop/`，
+  只重新启用 `nodeCliInspect` 这一个 fuse，并做 hardened-runtime 的 ad-hoc 签名。
+  原始 `ChatGPT.app` 永不修改。
+- 以仅限回环地址的 `--inspect-brk` 端口暂停启动该克隆，在首个脚本恢复前加载
+  主进程 hook；移除无效的 `SIGUSR1` 后备路径。
+- 已安装 Desktop 变化时重建克隆；克隆的 fuse 不再启用时不会复用；设置
+  `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1` 可恢复原来的 fail-closed 预检错误。
+- 把 `26.901.51231` 加入已验证 Desktop 矩阵，并正确识别 `removed` fuse 标记。
+- 注入器最多等待 60 秒，且主端口与备用端口共用同一截止时间：新签名的克隆首次
+  执行时，AMFI 校验 Electron framework 需要数秒，暂停中的主进程之后才开始监听。
+- 通过 `plutil` 的 raw 格式读取 `CFBundleShortVersionString` 等标量值，克隆清单
+  能正确记录 Desktop 版本。
+
 ## v0.3.3.4 - 2026-09-03
 
 修复当前 Codex Desktop 关闭 Electron Inspector fuse 时的 App 启动超时。
