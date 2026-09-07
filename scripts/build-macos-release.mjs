@@ -7,6 +7,7 @@ import {
   cp,
   mkdir,
   readFile,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -163,11 +164,19 @@ async function sha256(path) {
 
 async function createIcon(resources, buildRoot) {
   const master = join(buildRoot, "AppIcon.png");
+  const source = join(ROOT, "assets", "app-icon.svg");
   const iconset = join(buildRoot, "AppIcon.iconset");
   await mkdir(iconset, { recursive: true });
-  await run("/usr/bin/sips", [
-    "-s", "format", "png", join(ROOT, "assets", "app-icon.svg"), "--out", master,
-  ]);
+  try {
+    await run("/usr/bin/sips", [
+      "-s", "format", "png", source, "--out", master,
+    ]);
+  } catch {
+    await run("/usr/bin/qlmanage", [
+      "-t", "-s", "1024", "-o", buildRoot, source,
+    ]);
+    await rename(join(buildRoot, "app-icon.svg.png"), master);
+  }
   const sizes = [
     [16, "icon_16x16.png"],
     [32, "icon_16x16@2x.png"],

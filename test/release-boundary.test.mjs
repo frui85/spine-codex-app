@@ -42,6 +42,7 @@ test("release builder bundles only wrapper files and a pinned Node runtime", () 
   assert.match(builder, /metadata\.spineAppVersion/);
   assert.match(builder, /valueAfter\("--version"\)/);
   assert.match(builder, /nodejs\.org\/dist/);
+  assert.match(builder, /qlmanage/);
   assert.doesNotMatch(builder, /@spinejit|GhabiX|SpineCodex\/releases|npm pack/);
   assert.deepEqual(metadata.dependencies, undefined);
   assert.deepEqual(metadata.optionalDependencies, undefined);

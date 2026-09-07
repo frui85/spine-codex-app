@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,6 +118,15 @@ const remoteBootstrapSource =
   "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
   "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
   "` || true) && nohup `,`spine-codex`,` >${logPath} 2>&1 &`].join(``);";
+const segmentedRemoteBootstrapSource =
+  "function quote(e){return e}" +
+  "let logPath=\"/tmp/app-server.log\";" +
+  "let forwardAgent=`forward-agent`;" +
+  "let command=[`prefix`,` && (pkill -9 -U \\\"$(id -u)\\\" -f `," +
+  "quote(`${cli}.*[d]esktop-ssh-websocket-v0.sock`)," +
+  "` || true) && `,forwardAgent,` && SSH_AUTH_SOCK=/tmp/agent.sock`," +
+  "` nohup `,`spine-codex`,` -c features.code_mode_host=true`," +
+  "` app-server --listen unix://`,` >${logPath} 2>&1 &`].join(``);";
 const patchedRemoteBootstrap = hook.patchRemoteBootstrapCleanupSource(
   remoteBootstrapSource,
 );
@@ -161,6 +170,27 @@ assert.doesNotMatch(patchedRemoteBootstrap, /pkill -9 -U/);
 assert.throws(
   () => hook.patchRemoteBootstrapCleanupSource("const unrelated = true;"),
   /unsupported structure/,
+);
+
+const patchedSegmentedBootstrap = hook.patchRemoteBootstrapCleanupSource(
+  segmentedRemoteBootstrapSource,
+);
+const renderedSegmentedBootstrap = new Function(
+  "cli",
+  `${patchedSegmentedBootstrap}; return command;`,
+)("spine-codex");
+assert.match(renderedSegmentedBootstrap, /forward-agent/);
+assert.match(
+  renderedSegmentedBootstrap,
+  /SSH_AUTH_SOCK=\/tmp\/agent\.sock nohup sh -c/,
+);
+assert.match(
+  renderedSegmentedBootstrap,
+  /sh spine-codex -c features\.code_mode_host=true app-server --listen unix:\/\//,
+);
+assert.equal(
+  spawnSync("/bin/sh", ["-n", "-c", renderedSegmentedBootstrap]).status,
+  0,
 );
 
 assert.equal(hook.isMainBundleFilename("main-dcXtv3U5.js"), true);
@@ -220,6 +250,194 @@ assert.equal(hook.isCodexMainSurfaceUrl("app://-/index.html"), true);
 assert.equal(hook.isCodexMainSurfaceUrl("app://-/index.html#/thread/1"), true);
 assert.equal(hook.isCodexMainSurfaceUrl("https://example.com/index.html"), false);
 assert.equal(hook.isCodexMainSurfaceUrl("app://-/settings.html"), false);
+
+function createFakeIpcMain() {
+  const handlers = new Map();
+  return {
+    handlers,
+    handle(channel, handler) { handlers.set(channel, handler); },
+    removeHandler(channel) { handlers.delete(channel); },
+  };
+}
+
+const fakeElectronApp = Object.assign(new EventEmitter(), {
+  whenReady: async () => {},
+});
+const fakeIpcMain = createFakeIpcMain();
+const fakeElectron = {
+  app: fakeElectronApp,
+  webContents: { getAllWebContents: () => [] },
+  ipcMain: fakeIpcMain,
+};
+assert.equal(hook.isElectronMainApi(fakeElectron), true);
+assert.equal(hook.isElectronMainApi({ app: fakeElectronApp }), false);
+assert.equal(hook.isElectronModuleUnavailable(Object.assign(
+  new Error("Cannot find module 'electron'\nRequire stack:\n- internal/preload"),
+  { code: "MODULE_NOT_FOUND" },
+)), true);
+assert.equal(hook.isElectronModuleUnavailable(Object.assign(
+  new Error("Cannot find module 'unrelated'"),
+  { code: "MODULE_NOT_FOUND" },
+)), false);
+
+const missingElectron = Object.assign(
+  new Error("Cannot find module 'electron'\nRequire stack:\n- internal/preload"),
+  { code: "MODULE_NOT_FOUND" },
+);
+const originalFakeLoad = function fakeLoad(request) {
+  if (request === "electron") return fakeElectron;
+  return { request };
+};
+const fakeModuleApi = { _load: originalFakeLoad };
+let capturedElectron = null;
+const electronCapture = hook.captureElectronMainApi({
+  moduleApi: fakeModuleApi,
+  loadInitial: () => { throw missingElectron; },
+  onReady: (value) => { capturedElectron = value; },
+});
+assert.equal(electronCapture.deferred, true);
+assert.notEqual(fakeModuleApi._load, originalFakeLoad);
+assert.deepEqual(fakeModuleApi._load("unrelated", null, false), {
+  request: "unrelated",
+});
+assert.equal(capturedElectron, null);
+assert.equal(fakeModuleApi._load("electron", null, false), fakeElectron);
+assert.equal(capturedElectron, fakeElectron);
+assert.equal(fakeModuleApi._load, originalFakeLoad);
+
+let immediateElectron = null;
+const immediateCapture = hook.captureElectronMainApi({
+  moduleApi: { _load: originalFakeLoad },
+  loadInitial: () => fakeElectron,
+  onReady: (value) => { immediateElectron = value; },
+});
+assert.equal(immediateCapture.deferred, false);
+assert.equal(immediateElectron, fakeElectron);
+
+const durabilityError =
+  "Fatal error: Spine durability is faulted: Spine replay failed: " +
+  "sampling commit does not match its sampling-started record";
+assert.equal(hook.isDurabilityReplayMismatch(durabilityError), true);
+assert.equal(hook.isDurabilityReplayMismatch("different replay failure"), false);
+
+const childThreadId = "00000000-0000-0000-0000-000000000041";
+const parentThreadId = "00000000-0000-0000-0000-000000000042";
+const recoveredThreadId = "00000000-0000-0000-0000-000000000043";
+const replayFixture = await mkdtemp(join(tmpdir(), "spine-replay-history-test-"));
+try {
+  const archived = join(replayFixture, "archived_sessions");
+  await mkdir(archived, { recursive: true });
+  const childPath = join(archived, `rollout-child-${childThreadId}.jsonl`);
+  const parentPath = join(archived, `rollout-parent-${parentThreadId}.jsonl`);
+  const historyA = { type: "message", role: "user", content: [{ type: "input_text", text: "seed" }] };
+  const historyB = { type: "message", role: "assistant", content: [{ type: "output_text", text: "tail" }] };
+  const records = [
+    {
+      type: "session_meta",
+      payload: {
+        id: childThreadId,
+        parent_thread_id: parentThreadId,
+        thread_source: "subagent",
+      },
+    },
+    { type: "response_item", payload: { type: "message", role: "user", content: [] } },
+    { type: "compacted", payload: { replacement_history: [historyA] } },
+    {
+      type: "spine_sampling_started",
+      payload: {
+        payload: {
+          record: {
+            epoch: 0,
+            previous_commit_id: null,
+            attempt_id: { thread: parentThreadId },
+          },
+        },
+      },
+    },
+    { type: "response_item", payload: historyB },
+  ];
+  await writeFile(childPath, records.map((record) => JSON.stringify(record)).join("\n") + "\n");
+  await writeFile(parentPath, JSON.stringify({
+    type: "session_meta",
+    payload: { id: parentThreadId },
+  }) + "\n");
+
+  const materialized = await hook.readInheritedReplayHistory(childPath, childThreadId);
+  assert.deepEqual(materialized.history, [historyA, historyB]);
+  assert.equal(materialized.parentThreadId, parentThreadId);
+  const located = await hook.recoverInheritedReplayHistory(childThreadId, {
+    codexHome: replayFixture,
+  });
+  assert.equal(located.rolloutPath, childPath);
+  assert.equal(located.parentRolloutPath, parentPath);
+
+  const invalidPath = join(archived, `rollout-invalid-${recoveredThreadId}.jsonl`);
+  const invalidRecords = records.map((record) => JSON.parse(JSON.stringify(record)));
+  invalidRecords[0].payload.id = recoveredThreadId;
+  invalidRecords[3].payload.payload.record.attempt_id.thread = recoveredThreadId;
+  await writeFile(
+    invalidPath,
+    invalidRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
+  );
+  await assert.rejects(
+    hook.readInheritedReplayHistory(invalidPath, recoveredThreadId),
+    /mixed native-to-inherited lineage/,
+  );
+
+  const replayIpc = createFakeIpcMain();
+  const observedMessages = [];
+  const replayBridge = hook.installAppServerReplayRecovery({
+    electron: { ipcMain: replayIpc },
+    recoverHistory: async (threadId) => ({
+      history: [historyA, historyB],
+      itemCount: 2,
+      parentThreadId,
+      threadId,
+    }),
+  });
+  replayIpc.handle("codex_desktop:message-from-view", async (_event, message) => {
+    observedMessages.push(message);
+  });
+  assert.equal(replayBridge.ready, true);
+  const appServerHandler = replayIpc.handlers.get("codex_desktop:message-from-view");
+  await appServerHandler({}, {
+    type: "mcp-request",
+    request: {
+      method: "initialize",
+      params: { capabilities: { experimentalApi: true } },
+    },
+  });
+  await appServerHandler({}, {
+    type: "spine-thread-replay-aliases-sync",
+    aliases: [[childThreadId, recoveredThreadId]],
+  });
+  await appServerHandler({}, {
+    type: "mcp-request",
+    request: { method: "thread/read", params: { threadId: childThreadId } },
+  });
+  assert.equal(observedMessages.at(-1).request.params.threadId, recoveredThreadId);
+  await appServerHandler({}, {
+    type: "spine-thread-replay-recover",
+    hostId: "local",
+    errorMessage: durabilityError,
+    request: {
+      jsonrpc: "2.0",
+      id: "resume-1",
+      method: "thread/resume",
+      params: { threadId: childThreadId },
+    },
+  });
+  assert.equal(observedMessages.at(-1).type, "mcp-request");
+  assert.deepEqual(observedMessages.at(-1).request.params.history, [historyA, historyB]);
+  assert.equal(observedMessages.at(-1).request.params.path, null);
+  replayBridge.dispose();
+  assert.notEqual(
+    replayIpc.handlers.get("codex_desktop:message-from-view"),
+    appServerHandler,
+  );
+} finally {
+  await rm(replayFixture, { recursive: true, force: true });
+}
 
 const rendererSha256 = createHash("sha256").update(rendererSource).digest("hex");
 const rendererPayload = hook.loadRendererPayload({
@@ -315,6 +533,12 @@ try {
   );
   process.env.CODEX_CLI_PATH = "spine-codex";
   process.env.SPINE_CODEX_MIN_VERSION = "0.2.2";
+  const fixtureIpcMain = createFakeIpcMain();
+  const fixtureElectron = {
+    app: Object.assign(new EventEmitter(), { whenReady: async () => {} }),
+    webContents: { getAllWebContents: () => [] },
+    ipcMain: fixtureIpcMain,
+  };
   assert.equal(hook.installMainProcessHook({
     force: true,
     statusPath: fixtureStatus,
@@ -325,12 +549,10 @@ try {
         source: "globalThis.__spineRecoveryFixture = true;",
         sha256: rendererSha256,
       }),
-      electron: {
-        app: Object.assign(new EventEmitter(), { whenReady: async () => {} }),
-        webContents: { getAllWebContents: () => [] },
-      },
+      electron: fixtureElectron,
     },
   }), true);
+  fixtureIpcMain.handle("codex_desktop:message-from-view", async () => {});
   const earlyVersion = require(fixtureBridge);
   assert.equal(earlyVersion.check("0.2.2"), true);
   await new Promise((resolve) => setImmediate(resolve));
@@ -341,6 +563,7 @@ try {
   const hookStatus = JSON.parse(await readFile(fixtureStatus, "utf8"));
   assert.equal(hookStatus.state, "ready");
   assert.equal(hookStatus.rendererRecovery, true);
+  assert.equal(hookStatus.appServerReplayRecovery, true);
   assert.equal(hookStatus.rendererSha256, rendererSha256);
   assert.equal(hookStatus.mainFile, "main-deferred.js");
   assert.equal(hookStatus.versionFile, "src-version.js");
