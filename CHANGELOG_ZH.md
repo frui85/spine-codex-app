@@ -4,6 +4,11 @@
 
 ## 尚未发布
 
+- 提案：原生 macOS 状态栏与模式切换，默认外部 adapter，可主动选择副本及自动兜底。
+- 核验 adapter PATH 优先级和 initialize 握手，按本次 Desktop 生命周期持续恢复 Renderer 连接。
+- 记录官方 0.3.3 / CLI 0.147.0 与补充 fork 0.4.1 / CLI 0.153.4 基线。
+
+
 ## v26.901.20858 - 2026-09-05
 
 对应 ChatGPT/Codex Desktop `26.901.20858` 的 macOS 精确版本发布。低于

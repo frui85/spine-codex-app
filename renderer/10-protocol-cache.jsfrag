@@ -1,0 +1,439 @@
+  function readExpandedState() {
+    try {
+      return localStorage.getItem("spine-codex.view.expanded") !== "false";
+    } catch {
+      return true;
+    }
+  }
+
+  function writeExpandedState() {
+    try {
+      localStorage.setItem("spine-codex.view.expanded", String(state.expanded));
+    } catch {}
+  }
+
+  function readThreadAliases() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(THREAD_ALIASES_KEY) || "{}");
+      return new Map(
+        Object.entries(saved).filter(([raw, threadId]) =>
+          raw && typeof threadId === "string" && normalizeThreadId(threadId)),
+      );
+    } catch {
+      return new Map();
+    }
+  }
+
+  function writeThreadAliases() {
+    try {
+      localStorage.setItem(
+        THREAD_ALIASES_KEY,
+        JSON.stringify(Object.fromEntries(state.threadAliases)),
+      );
+    } catch {}
+  }
+
+  function readReplayAliases() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(REPLAY_ALIASES_KEY) || "null");
+      if (saved?.version !== REPLAY_ALIAS_CACHE_VERSION || !Array.isArray(saved.entries)) {
+        return new Map();
+      }
+      const cutoff = Date.now() - REPLAY_ALIAS_MAX_AGE_MS;
+      const aliases = new Map();
+      for (const entry of saved.entries) {
+        const source = entry?.source;
+        const target = entry?.target;
+        const updatedAt = Number(entry?.updatedAt);
+        if (
+          isReplayThreadId(source) &&
+          isReplayThreadId(target) &&
+          source !== target &&
+          Number.isFinite(updatedAt) &&
+          updatedAt >= cutoff
+        ) {
+          aliases.set(source, { target, updatedAt });
+        }
+      }
+      while (aliases.size > MAX_THREAD_ALIASES) {
+        aliases.delete(aliases.keys().next().value);
+      }
+      return aliases;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function writeReplayAliases() {
+    try {
+      localStorage.setItem(REPLAY_ALIASES_KEY, JSON.stringify({
+        version: REPLAY_ALIAS_CACHE_VERSION,
+        entries: [...state.replayAliases].map(([source, entry]) => ({
+          source,
+          target: entry.target,
+          updatedAt: entry.updatedAt,
+        })),
+      }));
+    } catch {}
+  }
+
+  function jsonSafeScalar(value, fallback = 0) {
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "number" || typeof value === "string") return value;
+    return fallback;
+  }
+
+  function nullableSafeScalar(value) {
+    return value == null ? null : jsonSafeScalar(value, null);
+  }
+
+  function normalizeContextPressure(pressure) {
+    if (!pressure || typeof pressure !== "object") return null;
+    const normalized = {
+      openInputTokens: nullableSafeScalar(pressure.openInputTokens),
+      currentInputTokens: nullableSafeScalar(pressure.currentInputTokens),
+      contextTokens: nullableSafeScalar(pressure.contextTokens),
+      problem: typeof pressure.problem === "string" ? pressure.problem : null,
+    };
+    return Object.values(normalized).some((value) => value != null) ? normalized : null;
+  }
+
+  function normalizeSpawnLink(link) {
+    if (!link || typeof link !== "object") return null;
+    const callId = typeof link.callId === "string" ? link.callId : "";
+    const ordinal = Number(link.ordinal);
+    const threadId = normalizeThreadId(link.threadId);
+    if (!callId || !Number.isInteger(ordinal) || ordinal < 0 || !threadId) return null;
+    return {
+      callId,
+      ordinal,
+      threadId,
+      agentPath: typeof link.agentPath === "string" ? link.agentPath : null,
+      summary: typeof link.summary === "string" ? link.summary.slice(0, 1_000) : null,
+      observedAtMs: normalizeTimestamp(link.observedAtMs),
+      startedAtMs: normalizeTimestamp(link.startedAtMs),
+      completedAtMs: normalizeTimestamp(link.completedAtMs),
+    };
+  }
+
+  function normalizeSpawnTarget(target) {
+    if (!target || typeof target !== "object") return null;
+    const callId = typeof target.callId === "string" ? target.callId.trim() : "";
+    const ordinal = Number(target.ordinal);
+    const summary = typeof target.summary === "string"
+      ? target.summary.replace(/\s+/g, " ").trim().slice(0, 1_000)
+      : "";
+    if (!callId || !Number.isInteger(ordinal) || ordinal < 0 || !summary) return null;
+    return {
+      callId,
+      ordinal,
+      threadId: normalizeThreadId(target.threadId),
+      agentPath: typeof target.agentPath === "string" && target.agentPath
+        ? target.agentPath.slice(0, 1_000)
+        : null,
+      summary,
+      observedAtMs: normalizeTimestamp(target.observedAtMs),
+      startedAtMs: normalizeTimestamp(target.startedAtMs),
+      completedAtMs: normalizeTimestamp(target.completedAtMs),
+    };
+  }
+
+  function normalizeSpawnIntent(intent, cachedAt = Date.now()) {
+    if (!intent || typeof intent !== "object") return null;
+    const threadId = normalizeThreadId(intent.threadId);
+    const callId = typeof intent.callId === "string" ? intent.callId.trim() : "";
+    if (!threadId || !callId || !Array.isArray(intent.tasks)) return null;
+    const tasks = intent.tasks
+      .slice(0, MAX_SPAWN_INTENT_TASKS)
+      .map((task, ordinal) => normalizeSpawnTarget({
+        ...task,
+        callId,
+        ordinal: Number.isInteger(Number(task?.ordinal))
+          ? Number(task.ordinal)
+          : ordinal,
+      }))
+      .filter(Boolean);
+    if (!tasks.length) return null;
+    return {
+      threadId,
+      turnId: typeof intent.turnId === "string" ? intent.turnId.slice(0, 256) : "",
+      callId,
+      hostId: typeof intent.hostId === "string" && intent.hostId
+        ? intent.hostId.slice(0, 256)
+        : null,
+      tasks,
+      cachedAt: Number.isFinite(Number(cachedAt)) ? Number(cachedAt) : Date.now(),
+    };
+  }
+
+  function normalizeTimestamp(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : null;
+  }
+
+  function normalizeSnapshot(snapshot, cachedAt = Date.now()) {
+    if (!snapshot || typeof snapshot.threadId !== "string") return null;
+    if (!Array.isArray(snapshot.nodes) || typeof snapshot.activeNodeId !== "string") {
+      return null;
+    }
+    const threadId = normalizeThreadId(snapshot.threadId);
+    if (!threadId) return null;
+    const nodes = snapshot.nodes
+      .filter((node) => node && typeof node.nodeId === "string")
+      .map((node) => {
+        const rawMemory = typeof node.memorySummary === "string"
+          ? node.memorySummary
+          : "";
+        return {
+          nodeId: node.nodeId,
+          parentId: typeof node.parentId === "string" ? node.parentId : null,
+          kind: node.kind,
+          status: node.status,
+          summary: typeof node.summary === "string"
+            ? node.summary.slice(0, 1_000)
+            : null,
+          memorySummary: rawMemory
+            ? rawMemory.slice(0, MAX_LIVE_MEMORY_SUMMARY_CHARS)
+            : null,
+          memorySummaryTruncated:
+            node.memorySummaryTruncated === true ||
+            rawMemory.length > MAX_LIVE_MEMORY_SUMMARY_CHARS,
+          spawnOutcome: node.spawnOutcome ?? null,
+          spawnLink: normalizeSpawnLink(node.spawnLink),
+          start: jsonSafeScalar(node.start),
+          end: nullableSafeScalar(node.end),
+          contextPressure: normalizeContextPressure(node.contextPressure),
+        };
+      });
+    if (!nodes.some((node) => node.nodeId === snapshot.activeNodeId)) return null;
+    return {
+      threadId,
+      turnId: typeof snapshot.turnId === "string" ? snapshot.turnId : "",
+      snapshotSeq: jsonSafeScalar(snapshot.snapshotSeq),
+      activeNodeId: snapshot.activeNodeId,
+      settledSpawnCallIds: Array.isArray(snapshot.settledSpawnCallIds)
+        ? snapshot.settledSpawnCallIds.filter((id) => typeof id === "string").slice(0, 512)
+        : [],
+      nodes,
+      cachedAt: Number.isFinite(Number(cachedAt)) ? Number(cachedAt) : Date.now(),
+    };
+  }
+
+  function compactSnapshotForPersistence(snapshot) {
+    const normalized = normalizeSnapshot(snapshot, snapshot?.cachedAt);
+    if (!normalized) return null;
+
+    const compactNode = (node) => {
+      const memorySummary = typeof node.memorySummary === "string"
+        ? node.memorySummary.slice(0, MAX_PERSISTED_MEMORY_SUMMARY_CHARS)
+        : null;
+      return {
+        ...node,
+        memorySummary,
+        memorySummaryTruncated:
+          node.memorySummaryTruncated === true ||
+          (typeof node.memorySummary === "string" &&
+            node.memorySummary.length > MAX_PERSISTED_MEMORY_SUMMARY_CHARS),
+      };
+    };
+    if (normalized.nodes.length <= MAX_PERSISTED_NODE_COUNT) {
+      return { ...normalized, nodes: normalized.nodes.map(compactNode) };
+    }
+
+    const byId = new Map(normalized.nodes.map((node) => [node.nodeId, node]));
+    const keep = new Set();
+    const addAncestorChain = (node, force = false) => {
+      const chain = [];
+      const seen = new Set();
+      let current = node;
+      while (current && !keep.has(current.nodeId) && !seen.has(current.nodeId)) {
+        seen.add(current.nodeId);
+        chain.push(current);
+        current = current.parentId ? byId.get(current.parentId) : null;
+      }
+      if (!force && keep.size + chain.length > MAX_PERSISTED_NODE_COUNT) return false;
+      for (let index = chain.length - 1; index >= 0; index -= 1) {
+        keep.add(chain[index].nodeId);
+      }
+      return true;
+    };
+
+    addAncestorChain(byId.get(normalized.activeNodeId), true);
+    for (
+      let index = normalized.nodes.length - 1;
+      index >= 0 && keep.size < MAX_PERSISTED_NODE_COUNT;
+      index -= 1
+    ) {
+      addAncestorChain(normalized.nodes[index]);
+    }
+    return {
+      ...normalized,
+      nodes: normalized.nodes
+        .filter((node) => keep.has(node.nodeId))
+        .map(compactNode),
+    };
+  }
+
+  function readSnapshotCache() {
+    try {
+      const payload = JSON.parse(localStorage.getItem(SNAPSHOT_CACHE_KEY) || "null");
+      if (
+        payload?.version !== SNAPSHOT_CACHE_VERSION ||
+        !Array.isArray(payload.entries)
+      ) {
+        return new Map();
+      }
+      const snapshots = new Map();
+      const now = Date.now();
+      for (const entry of payload.entries.slice(-MAX_THREADS)) {
+        if (!Array.isArray(entry) || entry.length !== 2) continue;
+        const cachedAt = Number(entry[1]?.cachedAt);
+        if (
+          !Number.isFinite(cachedAt) ||
+          cachedAt <= 0 ||
+          now - cachedAt > SNAPSHOT_CACHE_MAX_AGE_MS
+        ) {
+          continue;
+        }
+        const normalized = normalizeSnapshot(entry[1], cachedAt);
+        if (!normalized || normalizeThreadId(entry[0]) !== normalized.threadId) continue;
+        snapshots.delete(normalized.threadId);
+        snapshots.set(normalized.threadId, normalized);
+      }
+      if (snapshots.size !== payload.entries.length) {
+        if (snapshots.size) {
+          localStorage.setItem(SNAPSHOT_CACHE_KEY, JSON.stringify({
+            version: SNAPSHOT_CACHE_VERSION,
+            entries: [...snapshots.entries()],
+          }));
+        } else {
+          localStorage.removeItem(SNAPSHOT_CACHE_KEY);
+        }
+      }
+      return snapshots;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function readSpawnIntentCache() {
+    try {
+      const payload = JSON.parse(localStorage.getItem(SPAWN_INTENT_CACHE_KEY) || "null");
+      if (
+        payload?.version !== SPAWN_INTENT_CACHE_VERSION ||
+        !Array.isArray(payload.entries)
+      ) {
+        return new Map();
+      }
+      const result = new Map();
+      const now = Date.now();
+      for (const entry of payload.entries.slice(-MAX_SPAWN_INTENT_THREADS)) {
+        const threadId = normalizeThreadId(entry?.[0]);
+        if (!threadId || !Array.isArray(entry?.[1])) continue;
+        const intents = new Map();
+        for (const raw of entry[1].slice(-MAX_SPAWN_INTENTS_PER_THREAD)) {
+          const cachedAt = Number(raw?.cachedAt);
+          if (
+            !Number.isFinite(cachedAt) ||
+            cachedAt <= 0 ||
+            now - cachedAt > SNAPSHOT_CACHE_MAX_AGE_MS
+          ) {
+            continue;
+          }
+          const intent = normalizeSpawnIntent(raw, cachedAt);
+          if (!intent || intent.threadId !== threadId) continue;
+          intents.delete(intent.callId);
+          intents.set(intent.callId, intent);
+        }
+        if (intents.size) result.set(threadId, intents);
+      }
+      return result;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function writeSpawnIntentCache() {
+    try {
+      const entries = [...state.spawnIntents.entries()]
+        .slice(-MAX_SPAWN_INTENT_THREADS)
+        .map(([threadId, intents]) => [
+          threadId,
+          [...intents.values()].slice(-MAX_SPAWN_INTENTS_PER_THREAD),
+        ])
+        .filter(([, intents]) => intents.length);
+      let payload = JSON.stringify({
+        version: SPAWN_INTENT_CACHE_VERSION,
+        entries,
+      });
+      while (payload.length > MAX_SPAWN_INTENT_CACHE_CHARS && entries.length) {
+        if (entries.length > 1) {
+          entries.shift();
+        } else {
+          entries[0][1].shift();
+          if (!entries[0][1].length) entries.shift();
+        }
+        payload = JSON.stringify({
+          version: SPAWN_INTENT_CACHE_VERSION,
+          entries,
+        });
+      }
+      if (entries.length) localStorage.setItem(SPAWN_INTENT_CACHE_KEY, payload);
+      else localStorage.removeItem(SPAWN_INTENT_CACHE_KEY);
+    } catch {}
+  }
+
+  function writeSnapshotCache() {
+    state.snapshotCacheDirty = false;
+    try {
+      const entries = [...state.snapshots.entries()]
+        .map(([threadId, snapshot]) => [
+          threadId,
+          compactSnapshotForPersistence(snapshot),
+        ])
+        .filter(([, snapshot]) => snapshot);
+      let payload = JSON.stringify({
+        version: SNAPSHOT_CACHE_VERSION,
+        entries,
+      });
+      while (payload.length > MAX_PERSISTED_CACHE_CHARS && entries.length > 1) {
+        const removable = entries.findIndex(
+          ([threadId]) => threadId !== state.activeThreadId,
+        );
+        entries.splice(removable < 0 ? 0 : removable, 1);
+        payload = JSON.stringify({
+          version: SNAPSHOT_CACHE_VERSION,
+          entries,
+        });
+      }
+      localStorage.setItem(SNAPSHOT_CACHE_KEY, payload);
+    } catch {}
+  }
+
+  function scheduleSnapshotCacheWrite() {
+    state.snapshotCacheDirty = true;
+    if (state.snapshotWriteHandle) return;
+    const flush = () => {
+      state.snapshotWriteHandle = 0;
+      state.snapshotWriteKind = null;
+      if (state.snapshotCacheDirty) writeSnapshotCache();
+    };
+    if (typeof requestIdleCallback === "function") {
+      state.snapshotWriteKind = "idle";
+      state.snapshotWriteHandle = requestIdleCallback(flush, { timeout: 1_000 });
+    } else {
+      state.snapshotWriteKind = "timeout";
+      state.snapshotWriteHandle = setTimeout(flush, 100);
+    }
+  }
+
+  function cancelSnapshotCacheWrite() {
+    if (!state.snapshotWriteHandle) return;
+    if (state.snapshotWriteKind === "idle" && typeof cancelIdleCallback === "function") {
+      cancelIdleCallback(state.snapshotWriteHandle);
+    } else {
+      clearTimeout(state.snapshotWriteHandle);
+    }
+    state.snapshotWriteHandle = 0;
+    state.snapshotWriteKind = null;
+  }

@@ -188,6 +188,7 @@ See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.m
 ```sh
 git clone https://github.com/izumedonabe/spine-codex-app.git
 cd spine-codex-app
+npm run build:statusbar
 ./spine-app --diagnose
 ./spine-app
 ./spine-app /path/to/workspace
@@ -225,3 +226,9 @@ Issues and focused pull requests are welcome. Start with [CONTRIBUTING.md](CONTR
 Apache-2.0. See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).
 
 <p align="center"><sub>Independent project. Not affiliated with or endorsed by OpenAI.</sub></p>
+
+## Proposed Desktop 26.901.51231 mode controls
+
+The contribution adds a native macOS menu bar showing the active mode, Desktop and CLI versions, baseline match, and connection health. External adapter mode remains the default. `--mode clone` explicitly opts into a private re-signed Desktop copy and main-process hooks; `--mode auto` opts into clone-first startup with adapter fallback. Mode switches request a graceful restart, save preferences after readiness, and attempt rollback on failure. The clone-only replay/memory recovery and SSH bootstrap patches are not active in external mode.
+
+Official SpineCodex 0.3.3 maps to Codex CLI 0.147.0; supplementary xiurui-pan/SpineCodex 0.4.1 maps to 0.153.4. Official CLI updates remain a regression priority. Run `npm run regress:cli -- /path/to/spine-codex` for a version/protocol probe. See [the proposed release notes](docs/RELEASE_NOTES_v26.901.51231.md) for tested combinations and limitations. These features and version metadata are a contribution proposal, not an already published upstream release.

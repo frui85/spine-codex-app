@@ -1,0 +1,540 @@
+  function codexLocaleSource() {
+    if (localeSettingLoaded && typeof localeOverride === "string" && localeOverride.trim()) {
+      return localeOverride.trim();
+    }
+    return (
+      (typeof navigator === "object" ? navigator.language?.trim?.() : "") ||
+      document.documentElement?.getAttribute?.("lang")?.trim() ||
+      "en"
+    );
+  }
+
+  function resolveCodexLocale(value = codexLocaleSource()) {
+    let canonical;
+    try {
+      canonical = Intl.getCanonicalLocales(String(value).replace(/_/g, "-"))[0];
+    } catch {
+      canonical = "en";
+    }
+    const lower = canonical.toLowerCase();
+    if (lower === "zh" || lower.startsWith("zh-")) {
+      return /(?:^|[-])(hant|tw|hk|mo)(?:$|[-])/i.test(canonical)
+        ? "zh-Hant"
+        : "zh-Hans";
+    }
+    if (UI_MESSAGES[canonical]) return canonical;
+    const language = canonical.split("-")[0];
+    if (UI_MESSAGES[language]) return language;
+    if (language === "pt" && UI_MESSAGES["pt-BR"]) return "pt-BR";
+    return "en";
+  }
+
+  function messageTemplate(key, locale = state.locale) {
+    return UI_MESSAGES[locale]?.[key] ?? EN_MESSAGES[key] ?? key;
+  }
+
+  function interpolate(template, values = {}) {
+    return String(template).replace(/\{([a-zA-Z][a-zA-Z0-9_]*)\}/g, (_, key) =>
+      values[key] == null ? "" : String(values[key]));
+  }
+
+  function t(key, values) {
+    return interpolate(messageTemplate(key), values);
+  }
+
+  function formatInteger(value) {
+    try {
+      return new Intl.NumberFormat(state.locale, {
+        maximumFractionDigits: 0,
+      }).format(Number(value));
+    } catch {
+      return String(value);
+    }
+  }
+
+  function tp(key, count, values = {}) {
+    let category = "other";
+    try {
+      category = new Intl.PluralRules(state.locale).select(Number(count));
+    } catch {}
+    const localeMessages = UI_MESSAGES[state.locale] ?? EN_MESSAGES;
+    const localizedKey = localeMessages[`${key}.${category}`] != null
+      ? `${key}.${category}`
+      : `${key}.other`;
+    const fallbackKey = EN_MESSAGES[localizedKey] != null
+      ? localizedKey
+      : EN_MESSAGES[`${key}.other`] != null
+        ? `${key}.other`
+        : `${key}.one`;
+    const template =
+      localeMessages[localizedKey] ??
+      EN_MESSAGES[fallbackKey] ??
+      key;
+    return interpolate(template, {
+      ...values,
+      count: formatInteger(count),
+    });
+  }
+
+  function refreshLocale() {
+    const source = codexLocaleSource();
+    const locale = resolveCodexLocale(source);
+    if (source === state.localeSource && locale === state.locale) return false;
+    state.localeSource = source;
+    if (locale === state.locale) return false;
+    state.locale = locale;
+    state.rows.clear();
+    if (state.detailUi?.closeButton) {
+      state.detailUi.closeButton.setAttribute("aria-label", t("detail.close"));
+    }
+    if (state.ui?.host.isConnected && state.expanded) renderActiveNow();
+    if (state.detailRequested) scheduleWorkspaceDetailRefresh();
+    if (state.settingsSection?.isConnected) renderSettings();
+    if (activeAgentSettingsPanel()) scheduleSettingsMount(12);
+    return true;
+  }
+
+  function connectLocaleObserver() {
+    if (typeof MutationObserver !== "function" || !document.documentElement) return;
+    state.localeObserver?.disconnect();
+    state.localeObserver = new MutationObserver(() => {
+      queueMicrotask(refreshLocale);
+    });
+    state.localeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["lang"],
+    });
+  }
+
+  function onLanguageChange() {
+    queueMicrotask(refreshLocale);
+  }
+
+  function applyLocaleSetting(value) {
+    localeOverride = typeof value === "string" && value.trim()
+      ? value.trim()
+      : null;
+    localeSettingLoaded = true;
+    return refreshLocale();
+  }
+
+  function normalizeThreadId(value) {
+    if (typeof value !== "string") return null;
+    const normalized = value.replace(/^(?:local|remote):/, "");
+    if (normalized.startsWith("client-new-thread:")) return null;
+    const match = normalized.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    return match?.[0] ?? (normalized || null);
+  }
+
+  function isReplayThreadId(value) {
+    return THREAD_ID_PATTERN.test(String(value ?? ""));
+  }
+
+  function isRecoverableSpineFailure(value) {
+    const message = String(value ?? "");
+    if (DURABILITY_REPLAY_MISMATCH_PATTERN.test(message)) return true;
+    const overflow = message.match(SPINE_MEMORY_OVERFLOW_PATTERN);
+    return overflow != null && Number(overflow[1]) > 8_000;
+  }
+
+  function replayAliasEntries() {
+    return [...state.replayAliases].map(([source, entry]) => [source, entry.target]);
+  }
+
+  function syncReplayAliases() {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
+    const bridge = window.electronBridge;
+    if (typeof bridge?.sendMessageFromView !== "function") return false;
+    Promise.resolve(bridge.sendMessageFromView({
+      type: REPLAY_ALIAS_SYNC_MESSAGE,
+      hostId: "local",
+      aliases: replayAliasEntries(),
+    })).catch((error) => {
+      state.lastReplayRecovery = {
+        status: "alias-sync-failed",
+        message: String(error?.message ?? error),
+      };
+    });
+    return true;
+  }
+
+  function rememberReplayAlias(source, target) {
+    if (
+      !isReplayThreadId(source) ||
+      !isReplayThreadId(target) ||
+      source === target
+    ) return false;
+    state.replayAliases.delete(source);
+    state.replayAliases.set(source, { target, updatedAt: Date.now() });
+    while (state.replayAliases.size > MAX_THREAD_ALIASES) {
+      state.replayAliases.delete(state.replayAliases.keys().next().value);
+    }
+    writeReplayAliases();
+    syncReplayAliases();
+    return true;
+  }
+
+  function replaySourceThreadId(target) {
+    for (const [source, entry] of state.replayAliases) {
+      if (entry.target === target) return source;
+    }
+    return null;
+  }
+
+  function rewriteIncomingReplayThreadIds(data) {
+    if (!data || typeof data !== "object" || state.replayAliases.size === 0) {
+      return false;
+    }
+    let changed = false;
+    const rewrite = (holder, key) => {
+      const source = replaySourceThreadId(holder?.[key]);
+      if (!source) return;
+      try {
+        holder[key] = source;
+        changed = true;
+      } catch {}
+    };
+    rewrite(data, "threadId");
+    rewrite(data.params, "threadId");
+    rewrite(data.params?.thread, "id");
+    const response = data.message ?? data.response;
+    rewrite(response?.result, "threadId");
+    rewrite(response?.result?.thread, "id");
+    return changed;
+  }
+
+  function rememberOutgoingResume(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return;
+    const message = event?.detail;
+    const request = message?.request;
+    const requestId = request?.id == null ? null : String(request.id);
+    const threadId = request?.params?.threadId;
+    if (
+      message?.type !== "mcp-request" ||
+      message.hostId !== "local" ||
+      request?.method !== "thread/resume" ||
+      request.params?.history != null ||
+      !requestId ||
+      !isReplayThreadId(threadId)
+    ) return;
+    state.pendingResumeRequests.delete(requestId);
+    state.pendingResumeRequests.set(requestId, {
+      hostId: message.hostId,
+      request: {
+        ...request,
+        params: { ...request.params },
+      },
+    });
+    state.failedRecoveryIds.delete(requestId);
+    while (state.pendingResumeRequests.size > MAX_THREAD_ALIASES) {
+      state.pendingResumeRequests.delete(state.pendingResumeRequests.keys().next().value);
+    }
+  }
+
+  function replayResponse(data) {
+    if (data?.type !== "mcp-response") return null;
+    return data.message ?? data.response ?? null;
+  }
+
+  function redispatchReplayFailure(data) {
+    if (typeof window.postMessage !== "function") return;
+    queueMicrotask(() => window.postMessage(data, "*"));
+  }
+
+  function requestReplayRecovery(requestId, pending, errorMessage, originalData) {
+    const bridge = window.electronBridge;
+    if (
+      typeof bridge?.sendMessageFromView !== "function" ||
+      state.recoveringResumeRequests.size !== 0
+    ) return false;
+    state.recoveringResumeRequests.set(requestId, {
+      threadId: pending.request.params.threadId,
+      startedAt: Date.now(),
+    });
+    state.lastReplayRecovery = {
+      status: "recovering",
+      threadId: pending.request.params.threadId,
+    };
+    Promise.resolve(bridge.sendMessageFromView({
+      type: REPLAY_RECOVERY_MESSAGE,
+      hostId: pending.hostId,
+      request: pending.request,
+      errorMessage,
+    })).catch((error) => {
+      state.recoveringResumeRequests.delete(requestId);
+      state.pendingResumeRequests.delete(requestId);
+      state.failedRecoveryIds.add(requestId);
+      state.lastReplayRecovery = {
+        status: "failed",
+        threadId: pending.request.params.threadId,
+        message: String(error?.message ?? error),
+      };
+      console.error("[SpineCodex] App-level replay recovery failed:", error);
+      redispatchReplayFailure(originalData);
+    });
+    return true;
+  }
+
+  function adoptReplayAliasFromStatusNotification(data) {
+    if (
+      data?.type !== "mcp-notification" ||
+      data.method !== "thread/status/changed" ||
+      state.recoveringResumeRequests.size !== 1
+    ) return false;
+    const [[, recovering]] = state.recoveringResumeRequests;
+    const actualThreadId = data.params?.threadId;
+    if (
+      Date.now() - recovering.startedAt > 10_000 ||
+      !isReplayThreadId(actualThreadId) ||
+      actualThreadId === recovering.threadId ||
+      replaySourceThreadId(actualThreadId) != null
+    ) return false;
+    const remembered = rememberReplayAlias(recovering.threadId, actualThreadId);
+    if (remembered) {
+      state.lastReplayRecovery = {
+        status: "recovering",
+        threadId: recovering.threadId,
+        actualThreadId,
+      };
+    }
+    return remembered;
+  }
+
+  function handleReplayRecoveryMessage(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
+    const data = event?.data;
+    adoptReplayAliasFromStatusNotification(data);
+    const response = replayResponse(data);
+    const requestId = response?.id == null ? null : String(response.id);
+    const pending = requestId ? state.pendingResumeRequests.get(requestId) : null;
+    const recovering = requestId
+      ? state.recoveringResumeRequests.get(requestId)
+      : null;
+    const errorMessage = response?.error?.message ?? "";
+
+    if (
+      pending &&
+      isRecoverableSpineFailure(errorMessage) &&
+      !recovering &&
+      !state.failedRecoveryIds.has(requestId) &&
+      requestReplayRecovery(requestId, pending, errorMessage, data)
+    ) {
+      event.stopImmediatePropagation?.();
+      return true;
+    }
+
+    if (recovering && response) {
+      state.recoveringResumeRequests.delete(requestId);
+      state.pendingResumeRequests.delete(requestId);
+      if (response.error) {
+        state.failedRecoveryIds.add(requestId);
+        state.lastReplayRecovery = {
+          status: "failed",
+          threadId: recovering.threadId,
+          message: String(response.error.message ?? "App Server recovery failed"),
+        };
+      } else {
+        const actualThreadId = response.result?.thread?.id;
+        if (rememberReplayAlias(recovering.threadId, actualThreadId)) {
+          state.lastReplayRecovery = {
+            status: "recovered",
+            threadId: recovering.threadId,
+            actualThreadId,
+          };
+        } else {
+          state.lastReplayRecovery = {
+            status: "failed",
+            threadId: recovering.threadId,
+            message: "Recovery response did not contain a new thread ID",
+          };
+        }
+      }
+    } else if (response && pending && !isRecoverableSpineFailure(errorMessage)) {
+      state.pendingResumeRequests.delete(requestId);
+    }
+
+    rewriteIncomingReplayThreadIds(data);
+    return false;
+  }
+
+  function mainThreadId() {
+    const mainThread = document.querySelector?.('[data-pip-anchor-host="codex-main-thread"]');
+    const annotated = mainThread?.querySelector("[data-response-annotation-conversation]");
+    return normalizeThreadId(
+      annotated?.getAttribute("data-response-annotation-conversation"),
+    );
+  }
+
+  function selectedSidebarItem() {
+    const items = typeof document.querySelectorAll === "function"
+      ? [...document.querySelectorAll("[data-app-action-sidebar-thread-id]")]
+      : [];
+    return (
+      items.find((item) => item.getAttribute("aria-current") === "page") ??
+      items.find((item) => item.classList.contains("bg-token-list-hover-background")) ??
+      null
+    );
+  }
+
+  function rememberAlias(raw, threadId) {
+    if (!raw || !threadId) return;
+    if (state.threadAliases.get(raw) === threadId) return;
+    state.threadAliases.delete(raw);
+    state.threadAliases.set(raw, threadId);
+    while (state.threadAliases.size > MAX_THREAD_ALIASES) {
+      state.threadAliases.delete(state.threadAliases.keys().next().value);
+    }
+    writeThreadAliases();
+  }
+
+  function selectedThreadId() {
+    const selected = selectedSidebarItem();
+    const raw = selected?.getAttribute("data-app-action-sidebar-thread-id") ?? null;
+    const direct = normalizeThreadId(raw);
+    if (direct) return direct;
+
+    const aliased = raw ? state.threadAliases.get(raw) ?? null : null;
+    if (aliased) return aliased;
+
+    const main = mainThreadId();
+    if (raw && raw === state.pendingSidebarRaw) {
+      if (main && main !== state.pendingPreviousMainId) {
+        rememberAlias(raw, main);
+        state.pendingSidebarRaw = null;
+        state.pendingPreviousMainId = null;
+        return main;
+      }
+      return null;
+    }
+    if (raw && main) rememberAlias(raw, main);
+    return main;
+  }
+
+  function currentSnapshot() {
+    return state.activeThreadId ? state.snapshots.get(state.activeThreadId) ?? null : null;
+  }
+
+  function compareSequence(left, right) {
+    try {
+      const a = BigInt(left ?? 0);
+      const b = BigInt(right ?? 0);
+      return a < b ? -1 : a > b ? 1 : 0;
+    } catch {
+      return Number(left ?? 0) - Number(right ?? 0);
+    }
+  }
+
+  function attachSettledSpawnLinks(
+    snapshot,
+    previous,
+    threadSpawns,
+    threadIntents,
+    settledCallIds,
+  ) {
+    const previousById = new Map(
+      (previous?.nodes ?? []).map((node) => [node.nodeId, node]),
+    );
+    for (const node of snapshot.nodes) {
+      const previousLink = previousById.get(node.nodeId)?.spawnLink;
+      if (!node.spawnLink && previousLink) node.spawnLink = previousLink;
+    }
+
+    const transferredRows = new Map();
+    const claimedNodeIds = new Set(
+      snapshot.nodes.filter((node) => node.spawnLink).map((node) => node.nodeId),
+    );
+    for (const callId of settledCallIds) {
+      const progress = threadSpawns?.get(callId) ?? threadIntents?.get(callId);
+      if (!progress?.tasks?.length) continue;
+      const candidates = snapshot.nodes.filter((node) =>
+        node.kind !== "root_epoch" &&
+        node.spawnOutcome &&
+        !claimedNodeIds.has(node.nodeId)
+      );
+      for (const task of progress.tasks) {
+        let node = candidates.find((candidate) =>
+          !claimedNodeIds.has(candidate.nodeId) &&
+          candidate.summary === task.summary
+        );
+        if (!node) {
+          node = candidates.find((candidate) => !claimedNodeIds.has(candidate.nodeId));
+        }
+        if (!node) continue;
+        const link = normalizeSpawnLink({
+          callId,
+          ordinal: task.ordinal,
+          threadId: task.threadId,
+          agentPath: task.agentPath,
+          summary: task.summary,
+          observedAtMs: task.observedAtMs,
+          startedAtMs: task.startedAtMs,
+          completedAtMs: task.completedAtMs,
+        });
+        if (!link) continue;
+        node.spawnLink = link;
+        claimedNodeIds.add(node.nodeId);
+        transferredRows.set(`spawn:${callId}:${task.ordinal}`, `node:${node.nodeId}`);
+      }
+    }
+    return transferredRows;
+  }
+
+  function rememberSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot.threadId !== "string") return false;
+    if (!Array.isArray(snapshot.nodes) || typeof snapshot.activeNodeId !== "string") {
+      return false;
+    }
+    const threadId = normalizeThreadId(snapshot.threadId);
+    if (!threadId) return false;
+    const previous = state.snapshots.get(threadId);
+    if (
+      previous &&
+      compareSequence(snapshot.snapshotSeq, previous.snapshotSeq) < 0
+    ) {
+      return false;
+    }
+    const normalized = normalizeSnapshot(snapshot);
+    if (!normalized) return false;
+    const threadSpawns = state.spawns.get(threadId);
+    const threadIntents = state.spawnIntents.get(threadId);
+    const settledCallIds = snapshot.settledSpawnCallIds ?? [];
+    const transferredRows = attachSettledSpawnLinks(
+      normalized,
+      previous,
+      threadSpawns,
+      threadIntents,
+      settledCallIds,
+    );
+    const selectedRow = state.selectedRows.get(threadId);
+    if (selectedRow && transferredRows.has(selectedRow)) {
+      state.selectedRows.set(threadId, transferredRows.get(selectedRow));
+    }
+    state.snapshots.delete(threadId);
+    state.snapshots.set(threadId, normalized);
+    trimThreadCache();
+    for (const callId of settledCallIds) {
+      threadSpawns?.delete(callId);
+    }
+    if (threadId === state.activeThreadId) scheduleNativeSubagentLabelSync(4);
+    scheduleSnapshotCacheWrite();
+    return true;
+  }
+
+  function trimThreadCache() {
+    while (state.snapshots.size > MAX_THREADS) {
+      const oldest = [...state.snapshots.keys()].find(
+        (threadId) => threadId !== state.activeThreadId,
+      ) ?? state.snapshots.keys().next().value;
+      state.snapshots.delete(oldest);
+      state.spawns.delete(oldest);
+    }
+  }
+
+  function touchSnapshot(threadId) {
+    const snapshot = threadId ? state.snapshots.get(threadId) : null;
+    if (!snapshot) return false;
+    state.snapshots.delete(threadId);
+    state.snapshots.set(threadId, snapshot);
+    scheduleSnapshotCacheWrite();
+    return true;
+  }

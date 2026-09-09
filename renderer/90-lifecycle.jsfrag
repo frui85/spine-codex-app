@@ -1,0 +1,478 @@
+  function ingest(message) {
+    if (!message || message.type !== "mcp-notification") return false;
+    const changed =
+      message.method === TREE_METHOD
+        ? rememberSnapshot(message.params)
+        : message.method === SPAWN_METHOD
+          ? rememberSpawn(
+              message.params,
+              message.hostId ?? message.host_id ?? activeThreadHostId(),
+            )
+          : message.method === RAW_RESPONSE_ITEM_METHOD
+            ? rememberSpawnCallNotification(
+                message.params,
+                message.hostId ?? message.host_id ?? activeThreadHostId(),
+              )
+          : false;
+    const threadId = normalizeThreadId(message.params?.threadId);
+    if (changed && document.body && !state.ui?.host.isConnected) scheduleMount(24);
+    if (changed && threadId === state.activeThreadId && state.expanded) scheduleRender();
+    if (changed && threadId === state.activeThreadId && state.detailRequested) {
+      scheduleWorkspaceDetailRefresh();
+    }
+    return changed;
+  }
+
+  function onMessage(event) {
+    const data = event.data;
+    if (handleReplayRecoveryMessage(event)) return;
+    const settledFetch = settleCodexFetchResponse(data);
+    const settledAppServer = settleAppServerResponse(data);
+    if (!settledFetch && !settledAppServer) ingest(data);
+    if (
+      !settledFetch &&
+      data?.type === "fetch-response" &&
+      document.querySelector?.(
+        'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
+      )
+    ) {
+      // Codex keeps its runtime language in the structured localeOverride setting.
+      // Its own set-setting response is the earliest stable signal that the value
+      // may have changed; browser languagechange/html[lang] are not updated reliably.
+      scheduleLocaleSettingSync();
+    }
+  }
+
+  function activateThread(threadId) {
+    if (threadId === state.activeThreadId) {
+      if (state.expanded && state.ui?.host.isConnected) scheduleRender();
+      if (state.detailRequested) scheduleWorkspaceDetailRefresh();
+      return;
+    }
+    if (state.detailRequested) closeWorkspaceDetail(true, true);
+    state.selectedRows.clear();
+    state.activeThreadId = threadId;
+    touchSnapshot(threadId);
+    trimThreadCache();
+    state.rows.clear();
+    renderActiveNow();
+  }
+
+  function scheduleSwitchSync() {
+    queueMicrotask(() => ensureMounted(24));
+    if (state.switchFrame) cancelAnimationFrame(state.switchFrame);
+    state.switchFrame = requestAnimationFrame(() => {
+      state.switchFrame = 0;
+      handleThreadSelection();
+      ensureMounted(12);
+    });
+  }
+
+  function onSidebarClick(event) {
+    const target = event.target;
+    maybeScheduleSettingsFromClick(target);
+    if (document.querySelector?.(
+      'button[data-settings-panel-slug="general-settings"][aria-current="page"]',
+    )) {
+      // Fallback for Codex builds that do not forward the originating fetch response.
+      // This is event-bound and debounced; there is no timer or document observer at rest.
+      scheduleLocaleSettingSync(250);
+    }
+    const clickedButton = target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest?.("button")
+      : target?.parentElement?.closest?.("button");
+    if (clickedButton && clickedButton === childAgentSummaryButton()) {
+      scheduleNativeSubagentLabelSync(24);
+    }
+    const clickedSpawnTarget = clickedButton
+      ? knownSpawnTargets().find((target) =>
+          findNativeSubagentButton(target) === clickedButton)
+      : null;
+    if (clickedSpawnTarget) {
+      armNativeSubagentTitleHook(clickedSpawnTarget);
+      stopNativeSubagentListObserver();
+      scheduleNativeSubagentLabelSync(24);
+    }
+    if (
+      state.detailRequested &&
+      !state.detailToggleInProgress &&
+      clickedButton === workspaceSidebarToggle()
+    ) {
+      closeWorkspaceDetail(true, false);
+      scheduleMount(36);
+      return;
+    }
+    if (isTopToolbarLayoutButton(clickedButton)) armSummaryTriggerObserver();
+    const item = target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest?.("[data-app-action-sidebar-thread-id]")
+      : target?.parentElement?.closest?.("[data-app-action-sidebar-thread-id]");
+    if (!item) return;
+    stopNativeSubagentListObserver();
+    const itemHostId = item.getAttribute("data-app-action-sidebar-thread-host-id");
+    if (itemHostId) state.lastActiveHostId = itemHostId;
+    const raw = item.getAttribute("data-app-action-sidebar-thread-id");
+    const threadId = normalizeThreadId(raw) ?? state.threadAliases.get(raw) ?? null;
+    if (threadId) {
+      state.pendingSidebarRaw = null;
+      state.pendingPreviousMainId = null;
+    } else {
+      state.pendingSidebarRaw = raw;
+      state.pendingPreviousMainId = mainThreadId();
+    }
+    activateThread(threadId);
+    scheduleSwitchSync();
+  }
+
+  function handleThreadSelection() {
+    connectSidebarObserver();
+    connectThreadObserver();
+    const threadId = selectedThreadId();
+    // React can temporarily remove both identity surfaces while replacing the
+    // current thread DOM. Keep the last confirmed thread until a new identity
+    // appears; explicit sidebar clicks still clear it for real new-thread rows.
+    if (threadId || !state.activeThreadId) activateThread(threadId);
+    ensureMounted(24);
+    return threadId;
+  }
+
+  function findSidebarRoot() {
+    const first = document.querySelector("[data-app-action-sidebar-thread-id]");
+    if (!first) return null;
+    let candidate = first.parentElement;
+    for (let current = first.parentElement; current && current !== document.body; current = current.parentElement) {
+      const rect = current.getBoundingClientRect();
+      const count = current.querySelectorAll("[data-app-action-sidebar-thread-id]").length;
+      if (count >= 2 && rect.width <= 420) candidate = current;
+    }
+    return candidate;
+  }
+
+  function connectSidebarObserver() {
+    if (typeof MutationObserver !== "function") return;
+    const root = findSidebarRoot();
+    if (!root || state.sidebarRoot === root) return;
+    state.sidebarObserver?.disconnect();
+    state.sidebarRoot = root;
+    state.sidebarObserver = new MutationObserver((mutations) => {
+      const relevant = mutations.some((mutation) =>
+        mutation.type === "childList" ||
+        mutation.target.matches?.("[data-app-action-sidebar-thread-id]"));
+      if (relevant) queueMicrotask(handleThreadSelection);
+    });
+    state.sidebarObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: [
+        "aria-current",
+        "class",
+        "data-app-action-sidebar-thread-id",
+      ],
+    });
+  }
+
+  function connectThreadObserver() {
+    if (typeof MutationObserver !== "function") return;
+    const root = document.querySelector('[data-pip-anchor-host="codex-main-thread"]');
+    if (!root || state.threadRoot === root) return;
+    state.threadObserver?.disconnect();
+    state.threadRoot = root;
+    state.threadObserver = new MutationObserver((mutations) => {
+      const selector = "[data-response-annotation-conversation]";
+      const panelSelector = '[data-pip-obstacle="thread-summary-panel"]';
+      const panelChanged = mutations.some((mutation) =>
+        mutation.target.closest?.(panelSelector) ||
+        [...mutation.addedNodes, ...mutation.removedNodes].some((node) =>
+          node.nodeType === Node.ELEMENT_NODE &&
+          (node.matches?.(panelSelector) || node.querySelector?.(panelSelector))));
+      if (panelChanged) queueSummaryMount();
+      const relevant = mutations.some((mutation) => {
+        if (mutation.type === "attributes") return mutation.target.matches?.(selector);
+        return [...mutation.addedNodes, ...mutation.removedNodes].some((node) =>
+          node.nodeType === Node.ELEMENT_NODE &&
+          (node.matches?.(selector) || node.querySelector?.(selector)));
+      });
+      if (relevant) queueMicrotask(handleThreadSelection);
+    });
+    state.threadObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-response-annotation-conversation"],
+    });
+  }
+
+  function stopStartupThreadSync() {
+    state.startupThreadObserver?.disconnect();
+    state.startupThreadObserver = null;
+    if (state.startupThreadTimer) clearTimeout(state.startupThreadTimer);
+    state.startupThreadTimer = 0;
+    state.startupThreadSyncQueued = false;
+  }
+
+  function startupThreadSyncReady() {
+    return Boolean(
+      state.activeThreadId &&
+      state.sidebarRoot &&
+      state.threadRoot
+    );
+  }
+
+  function runStartupThreadSync() {
+    state.startupThreadSyncQueued = false;
+    if (state.destroyed) {
+      stopStartupThreadSync();
+      return;
+    }
+    handleThreadSelection();
+    if (startupThreadSyncReady()) stopStartupThreadSync();
+  }
+
+  function queueStartupThreadSync() {
+    if (state.startupThreadSyncQueued || state.destroyed) return;
+    state.startupThreadSyncQueued = true;
+    queueMicrotask(runStartupThreadSync);
+  }
+
+  function startStartupThreadSync() {
+    runStartupThreadSync();
+    if (
+      startupThreadSyncReady() ||
+      !document.body ||
+      typeof MutationObserver !== "function"
+    ) {
+      return;
+    }
+    stopStartupThreadSync();
+    state.startupThreadObserver = new MutationObserver(queueStartupThreadSync);
+    state.startupThreadObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+    });
+    state.startupThreadTimer = setTimeout(stopStartupThreadSync, 15_000);
+  }
+
+  function onResize() {
+    if (
+      state.ui?.host.isConnected &&
+      !isValidSummaryContainer(state.ui.host.parentElement)
+    ) {
+      state.ui.host.remove();
+    }
+    ensureMounted(12);
+    if (activeAgentSettingsPanel()) scheduleSettingsMount(12);
+  }
+
+  function initialize() {
+    refreshLocale();
+    connectLocaleObserver();
+    window.addEventListener("languagechange", onLanguageChange);
+    void syncLocaleSetting();
+    startStartupThreadSync();
+    connectSummarySurfaceObserver();
+    loadHostCatalog();
+    syncReplayAliases();
+    scheduleMount(60);
+    scheduleSettingsMount(30);
+    scheduleNativeSubagentLabelSync(24);
+  }
+
+  function clearCache() {
+    cancelSnapshotCacheWrite();
+    state.snapshotCacheDirty = false;
+    state.snapshots.clear();
+    state.spawns.clear();
+    state.spawnIntents.clear();
+    state.namedSpawnThreads.clear();
+    state.namingSpawnThreads.clear();
+    state.selectedRows.clear();
+    state.expandedBuckets.clear();
+    state.expandedEpochs.clear();
+    state.expandedSubtrees.clear();
+    state.subagentLabelAttempts = 0;
+    if (state.subagentLabelFrame) cancelAnimationFrame(state.subagentLabelFrame);
+    state.subagentLabelFrame = 0;
+    stopNativeSubagentListObserver();
+    stopNativeSubagentTitleHook();
+    state.threadAliases.clear();
+    state.replayAliases.clear();
+    syncReplayAliases();
+    state.pendingResumeRequests.clear();
+    state.recoveringResumeRequests.clear();
+    state.failedRecoveryIds.clear();
+    state.lastReplayRecovery = null;
+    state.rows.clear();
+    closeWorkspaceDetail(false, true);
+    try {
+      localStorage.removeItem(SNAPSHOT_CACHE_KEY);
+      localStorage.removeItem(SPAWN_INTENT_CACHE_KEY);
+      localStorage.removeItem(THREAD_ALIASES_KEY);
+      localStorage.removeItem(REPLAY_ALIASES_KEY);
+    } catch {}
+    renderActiveNow();
+    return true;
+  }
+
+  window.addEventListener("message", onMessage, true);
+  window.addEventListener(APP_SERVER_VIEW_EVENT, rememberOutgoingResume, true);
+  window.addEventListener("resize", onResize, { passive: true });
+  window.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("click", onSidebarClick, true);
+
+  const api = Object.freeze({
+    version: VERSION,
+    revision: RENDERER_REVISION,
+    ingest,
+    projectSnapshot,
+    getStats: () => ({
+      open: state.expanded,
+      embedded: Boolean(state.ui?.host.isConnected),
+      activeThreadId: state.activeThreadId,
+      activeCached: Boolean(currentSnapshot()),
+      threads: state.snapshots.size,
+      rows: state.rows.size,
+      framePending: state.frame !== 0,
+      mountPending: state.mountFrame !== 0,
+      settingsEmbedded: Boolean(state.settingsSection?.isConnected),
+      settingsHostId: state.settingsHostId,
+      settingsAvailable: state.settingsAvailable,
+      settingsEnabled:
+        state.settingsFeatures.get("spine_spawn")?.enabled === true,
+      settingsFeatures: [...state.settingsFeatures.values()].map((feature) => ({
+        name: feature.name,
+        enabled: feature.enabled,
+      })),
+      settingsLoading: state.settingsLoading,
+      settingsSaving: state.settingsSaving,
+      locale: state.locale,
+      localeSource: state.localeSource,
+      localeOverride: localeSettingLoaded ? localeOverride : undefined,
+      localeSettingLoaded,
+      localeSyncPending:
+        state.localeSyncInFlight || state.localeSyncTimer !== 0,
+      supportedLocales: Object.keys(UI_MESSAGES),
+      detailOpen: state.detailRequested,
+      detailMounted: Boolean(state.detailUi?.host.isConnected),
+      detailSurface: "workspace-sidebar",
+      detailMountPending:
+        state.detailMountFrame !== 0 || state.detailRefreshFrame !== 0,
+      treeMotionPending: state.treeMotionTimer !== 0,
+      expandedBuckets: state.expandedBuckets.size,
+      expandedEpochs: state.expandedEpochs.size,
+      expandedSubtrees: state.expandedSubtrees.size,
+      subagentLabelSyncPending: state.subagentLabelFrame !== 0,
+      subagentListObserved: Boolean(state.subagentListObserver),
+      subagentTitleHookPending: Boolean(state.subagentTitleObserver),
+      replayRecoveryAliases: state.replayAliases.size,
+      replayRecoveryPending: state.pendingResumeRequests.size,
+      replayRecoveryInFlight: state.recoveringResumeRequests.size,
+      lastReplayRecovery: state.lastReplayRecovery,
+    }),
+    exportSnapshots: () => [...state.snapshots.values()],
+    exportSpawnIntents: () => [...state.spawnIntents.entries()].map(
+      ([threadId, intents]) => [threadId, [...intents.values()]],
+    ),
+    rememberSpawnIntent: (intent, hostId) => rememberSpawnIntent(intent, hostId),
+    knownSpawnTargets,
+    getNodeDetail: (snapshot, nodeId) => nodeDetailModel(snapshot, nodeId),
+    resolveDetailItem: (snapshot, rowKey) =>
+      resolveWorkspaceDetailItem(snapshot, rowKey),
+    nativeSpawnTaskTitle,
+    normalizeSpawnStatus,
+    spawnPhase,
+    spawnTimingText,
+    spawnTimingDetail,
+    mergeSpawnTask,
+    findNativeSubagentButton,
+    findNativeSubagentDetailTitle,
+    syncNativeSubagentLabel,
+    syncNativeSubagentDetailTitle,
+    armNativeSubagentTitleHook,
+    connectNativeSubagentListObserver,
+    syncNativeSubagentLabels,
+    openNativeSubagent,
+    nameSpawnThread: (hostId, task) => nameSpawnThread(hostId, task),
+    setSpawnThreadName: (hostId, task) => setSpawnThreadName(hostId, task),
+    setBucketExpanded: (bucketKey, expanded = true) => {
+      if (typeof bucketKey !== "string" || !bucketKey) return false;
+      if (expanded) state.expandedBuckets.add(bucketKey);
+      else state.expandedBuckets.delete(bucketKey);
+      scheduleRender();
+      return true;
+    },
+    setEpochExpanded: (epochKey, expanded = true) => {
+      if (typeof epochKey !== "string" || !epochKey) return false;
+      if (expanded) state.expandedEpochs.add(epochKey);
+      else state.expandedEpochs.delete(epochKey);
+      scheduleRender();
+      return true;
+    },
+    setSubtreeExpanded: (subtreeKey, expanded = true) => {
+      if (typeof subtreeKey !== "string" || !subtreeKey) return false;
+      if (expanded) state.expandedSubtrees.add(subtreeKey);
+      else state.expandedSubtrees.delete(subtreeKey);
+      scheduleRender();
+      return true;
+    },
+    selectSettingsFeatures: (features) => selectSpineSettingsFeatures(features),
+    settingsStatus: (hostId, features) => settingsStatusModel(hostId, features),
+    resolveLocale: resolveCodexLocale,
+    translate: (key, values) => t(key, values),
+    refreshLocale,
+    clearCache,
+    sync: handleThreadSelection,
+    syncSettings: () => {
+      scheduleSettingsMount(24);
+      return true;
+    },
+    destroy: () => {
+      state.destroyed = true;
+      window.removeEventListener("message", onMessage, true);
+      window.removeEventListener(APP_SERVER_VIEW_EVENT, rememberOutgoingResume, true);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("languagechange", onLanguageChange);
+      document.removeEventListener("click", onSidebarClick, true);
+      stopStartupThreadSync();
+      state.sidebarObserver?.disconnect();
+      state.threadObserver?.disconnect();
+      state.panelObserver?.disconnect();
+      state.summarySurfaceObserver?.disconnect();
+      state.localeObserver?.disconnect();
+      stopSummaryTriggerObserver();
+      finishTreeMotion();
+      cancelSnapshotCacheWrite();
+      if (state.snapshotCacheDirty) writeSnapshotCache();
+      if (state.frame) cancelAnimationFrame(state.frame);
+      if (state.switchFrame) cancelAnimationFrame(state.switchFrame);
+      if (state.mountFrame) cancelAnimationFrame(state.mountFrame);
+      if (state.detailMountFrame) cancelAnimationFrame(state.detailMountFrame);
+      if (state.detailRefreshFrame) cancelAnimationFrame(state.detailRefreshFrame);
+      if (state.settingsFrame) cancelAnimationFrame(state.settingsFrame);
+      if (state.subagentLabelFrame) cancelAnimationFrame(state.subagentLabelFrame);
+      stopNativeSubagentListObserver();
+      stopNativeSubagentTitleHook();
+      if (state.settingsSavedTimer) clearTimeout(state.settingsSavedTimer);
+      if (state.localeSyncTimer) clearTimeout(state.localeSyncTimer);
+      for (const pending of state.pendingRequests.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("Spine settings renderer was destroyed"));
+      }
+      state.pendingRequests.clear();
+      for (const pending of state.pendingFetchRequests.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("Spine locale renderer was destroyed"));
+      }
+      state.pendingFetchRequests.clear();
+      closeWorkspaceDetail(false, true);
+      state.ui?.host.remove();
+      state.settingsSection?.remove();
+      delete window[GLOBAL_KEY];
+    },
+  });
+  Object.defineProperty(window, GLOBAL_KEY, { value: api, configurable: true });
+
+  if (document.body) initialize();
+  else document.addEventListener("DOMContentLoaded", initialize, { once: true });
+  return VERSION;
+})();

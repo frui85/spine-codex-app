@@ -1,0 +1,501 @@
+  function createDetailSection(label, text, extraClass = "") {
+    const section = document.createElement("div");
+    section.className = `detail-section${extraClass ? ` ${extraClass}` : ""}`;
+    const heading = document.createElement("div");
+    heading.className = "detail-label";
+    heading.textContent = label;
+    const body = document.createElement("div");
+    body.className = "detail-text";
+    body.textContent = text;
+    section.append(heading, body);
+    return section;
+  }
+
+  function createDetailAction(label, action, value = "") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "detail-action";
+    button.dataset.spineAction = action;
+    if (value) button.dataset.value = value;
+    const icon = action === "toggle-subtree"
+      ? '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5.5" cy="5" r="1.4"/><circle cx="14.5" cy="8" r="1.4"/><circle cx="14.5" cy="15" r="1.4"/><path d="M5.5 6.4v3.1a5.5 5.5 0 0 0 5.5 5.5h2.1M5.5 8.8h5.6A3.4 3.4 0 0 0 13.1 8"/></svg>'
+      : action === "open-child-agent"
+        ? '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="6.1" cy="10" r="2.1"/><circle cx="13.9" cy="5.8" r="2.1"/><circle cx="13.9" cy="14.2" r="2.1"/><path d="M8 9.05l3.95-2.15M8 10.95l3.95 2.15"/></svg>'
+        : '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.25" y="6.25" width="9" height="9" rx="2"/><path d="M13.2 6.2V5.3A1.55 1.55 0 0 0 11.65 3.75H5.3A1.55 1.55 0 0 0 3.75 5.3v6.35A1.55 1.55 0 0 0 5.3 13.2h.9"/></svg>';
+    button.innerHTML = `${icon}<span></span>`;
+    button.lastElementChild.textContent = label;
+    return button;
+  }
+
+  function nativeSpawnTaskTitle(callId, ordinal) {
+    const fragment = nativeSpawnTaskIdentity(callId).fragment;
+    return `Spawn ${fragment} ${Number(ordinal)}`;
+  }
+
+  function nativeSpawnTaskIdentity(callId, ordinal = null) {
+    const fragment = String(callId || "")
+      .split("")
+      .filter((character) => /^[a-z0-9]$/i.test(character))
+      .join("")
+      .toLowerCase()
+      .slice(0, 20) || "call";
+    return {
+      fragment,
+      ordinal: ordinal == null ? null : Number(ordinal),
+    };
+  }
+
+  function comparableText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function nativeSubagentRows() {
+    const rows = [];
+    for (const button of document.querySelectorAll("button")) {
+      if (button.matches('[data-slot="thread-summary-panel-item-button"]')) continue;
+      const rect = button.getBoundingClientRect();
+      if (
+        !button.isConnected ||
+        rect.width <= 0 ||
+        rect.height <= 0
+      ) {
+        continue;
+      }
+      const leafTexts = [...button.querySelectorAll("span")]
+        .filter((span) => !span.children.length)
+        .map((span) => comparableText(span.textContent))
+        .filter(Boolean);
+      if (
+        !button.querySelector(":scope > img[aria-hidden='true']")
+      ) {
+        continue;
+      }
+      rows.push({ button, leafTexts });
+    }
+    return rows;
+  }
+
+  function nativeSubagentOverviewRoot() {
+    const groups = [...new Set(
+      nativeSubagentRows()
+        .map(({ button }) =>
+          button.closest?.(
+            '[data-slot="thread-summary-panel-item-group"]',
+          ))
+        .filter(Boolean),
+    )];
+    if (!groups.length) return null;
+    const first = groups[0];
+    const candidates = [
+      first.parentElement?.parentElement,
+      first.parentElement,
+      first,
+    ].filter(Boolean);
+    return candidates.find((candidate) => {
+      if (!groups.every((group) => candidate.contains(group))) return false;
+      const rect = candidate.getBoundingClientRect();
+      return (
+        candidate.isConnected &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    }) ?? null;
+  }
+
+  function findNativeSubagentButton(target) {
+    const rows = nativeSubagentRows();
+    const identity = target?.callId != null
+      ? nativeSpawnTaskIdentity(target.callId, target.ordinal)
+      : null;
+    if (identity && Number.isInteger(identity.ordinal)) {
+      const structuredKey = `${identity.fragment}:${identity.ordinal}`;
+      const matches = [...document.querySelectorAll("button")]
+        .filter((button) => {
+          if (
+            !button.isConnected ||
+            button.matches('[data-slot="thread-summary-panel-item-button"]')
+          ) {
+            return false;
+          }
+          const rect = button.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .filter((button) =>
+          button.dataset.spineSpawnKey === structuredKey ||
+          [...button.querySelectorAll("span")]
+            .filter((span) => !span.children.length)
+            .map((span) => comparableText(span.textContent))
+            .some((text) => {
+              const lower = text.toLowerCase();
+              if (!lower.includes(identity.fragment)) return false;
+              const trailingOrdinal = lower.match(/(\d+)\s*$/)?.[1];
+              return Number(trailingOrdinal) === identity.ordinal;
+            })
+        );
+      if (matches.length === 1) return matches[0];
+    }
+    const preciseNames = [
+      friendlySpawnName(target?.summary),
+    ].map(comparableText).filter(Boolean);
+    for (const name of preciseNames) {
+      const matches = rows.filter(({ leafTexts }) => leafTexts.includes(name));
+      if (matches.length === 1) return matches[0].button;
+    }
+    const result = comparableText(target?.resultSummary);
+    if (result) {
+      const matches = rows.filter(({ leafTexts }) =>
+        leafTexts.some((text) => text === result)
+      );
+      if (matches.length === 1) return matches[0].button;
+    }
+    return null;
+  }
+
+  function knownSpawnTargets() {
+    const targets = new Map();
+    const append = (target) => {
+      const link = normalizeSpawnTarget(target);
+      if (!link) return;
+      const key = `${link.callId}:${link.ordinal}`;
+      const previous = targets.get(key);
+      targets.set(key, previous ? {
+        ...previous,
+        ...link,
+        threadId: link.threadId || previous.threadId,
+        agentPath: link.agentPath || previous.agentPath,
+        summary: link.summary || previous.summary,
+        observedAtMs: link.observedAtMs || previous.observedAtMs,
+        startedAtMs: link.startedAtMs || previous.startedAtMs,
+        completedAtMs: link.completedAtMs || previous.completedAtMs,
+      } : link);
+    };
+    const activeThreadId = normalizeThreadId(state.activeThreadId);
+    for (const intent of state.spawnIntents.get(activeThreadId)?.values() ?? []) {
+      for (const task of intent.tasks ?? []) append(task);
+    }
+    for (const node of currentSnapshot()?.nodes ?? []) {
+      if (node.spawnLink) append({
+        ...node.spawnLink,
+        summary: node.spawnLink.summary || node.summary,
+      });
+    }
+    for (const progress of state.spawns
+      .get(activeThreadId)?.values() ?? []) {
+      for (const task of progress.tasks ?? []) {
+        append({
+          callId: progress.callId,
+          ordinal: task.ordinal,
+          threadId: task.threadId,
+          agentPath: task.agentPath,
+          summary: task.summary,
+        });
+      }
+    }
+    return [...targets.values()];
+  }
+
+  function syncNativeSubagentLabel(target) {
+    const name = friendlySpawnName(target?.summary);
+    const button = findNativeSubagentButton(target);
+    if (!name || !button || target?.callId == null) return false;
+    const identity = nativeSpawnTaskIdentity(target.callId, target.ordinal);
+    const title = [...button.querySelectorAll("span")]
+      .filter((span) => !span.children.length)
+      .find((span) => {
+        const text = comparableText(span.textContent);
+        if (text === name) return true;
+        const lower = text.toLowerCase();
+        return (
+          lower.includes(identity.fragment) &&
+          Number(lower.match(/(\d+)\s*$/)?.[1]) === identity.ordinal
+        );
+      });
+    if (!title) return false;
+    button.dataset.spineSpawnKey = `${identity.fragment}:${identity.ordinal}`;
+    if (comparableText(title.textContent) === name) return false;
+    title.textContent = name;
+    return true;
+  }
+
+  function findNativeSubagentDetailTitle(target) {
+    if (target?.callId == null) return null;
+    const identity = nativeSpawnTaskIdentity(target.callId, target.ordinal);
+    if (!Number.isInteger(identity.ordinal)) return null;
+    const structuredKey = `${identity.fragment}:${identity.ordinal}`;
+    const nativeTitle = comparableText(
+      nativeSpawnTaskTitle(target.callId, target.ordinal),
+    ).toLowerCase();
+    const matches = [...document.querySelectorAll("span")]
+      .filter((span) => {
+        if (!span.isConnected || span.children.length) return false;
+        const header = span.parentElement;
+        if (
+          !header?.querySelector(":scope > button") ||
+          !header.querySelector(":scope > img[aria-hidden='true']")
+        ) {
+          return false;
+        }
+        const headerRect = header.getBoundingClientRect();
+        const titleRect = span.getBoundingClientRect();
+        return (
+          headerRect.width > 0 &&
+          headerRect.height > 0 &&
+          headerRect.top >= 0 &&
+          headerRect.top < 100 &&
+          titleRect.width > 0 &&
+          titleRect.height > 0
+        );
+      })
+      .filter((span) =>
+        span.dataset.spineSpawnDetailKey === structuredKey ||
+        comparableText(span.textContent).toLowerCase() === nativeTitle
+      );
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function syncNativeSubagentDetailTitle(target) {
+    const name = friendlySpawnName(target?.summary);
+    const title = findNativeSubagentDetailTitle(target);
+    if (!name || !title || target?.callId == null) return false;
+    const identity = nativeSpawnTaskIdentity(target.callId, target.ordinal);
+    title.dataset.spineSpawnDetailKey =
+      `${identity.fragment}:${identity.ordinal}`;
+    if (comparableText(title.textContent) === name) return false;
+    title.textContent = name;
+    return true;
+  }
+
+  function syncNativeSubagentLabels() {
+    let changed = 0;
+    for (const target of knownSpawnTargets()) {
+      if (syncNativeSubagentLabel(target)) changed += 1;
+      if (syncNativeSubagentDetailTitle(target)) changed += 1;
+    }
+    return changed;
+  }
+
+  function stopNativeSubagentListObserver() {
+    state.subagentListObserver?.disconnect();
+    state.subagentListObserver = null;
+    state.subagentListRoot = null;
+    state.subagentListSyncQueued = false;
+  }
+
+  function connectNativeSubagentListObserver() {
+    if (typeof MutationObserver !== "function") return false;
+    const root = nativeSubagentOverviewRoot();
+    if (!root) {
+      if (state.subagentListRoot && !state.subagentListRoot.isConnected) {
+        stopNativeSubagentListObserver();
+      }
+      return false;
+    }
+    if (
+      state.subagentListObserver &&
+      state.subagentListRoot === root
+    ) {
+      return true;
+    }
+    stopNativeSubagentListObserver();
+    state.subagentListRoot = root;
+    state.subagentListObserver = new MutationObserver(() => {
+      if (state.subagentListSyncQueued) return;
+      state.subagentListSyncQueued = true;
+      queueMicrotask(() => {
+        state.subagentListSyncQueued = false;
+        if (
+          state.destroyed ||
+          !state.subagentListRoot?.isConnected
+        ) {
+          stopNativeSubagentListObserver();
+          return;
+        }
+        syncNativeSubagentLabels();
+      });
+    });
+    state.subagentListObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+    return true;
+  }
+
+  function stopNativeSubagentTitleHook() {
+    state.subagentTitleObserver?.disconnect();
+    state.subagentTitleObserver = null;
+    if (state.subagentTitleTimeout) clearTimeout(state.subagentTitleTimeout);
+    if (state.subagentTitleSettleTimer) {
+      clearTimeout(state.subagentTitleSettleTimer);
+    }
+    state.subagentTitleTimeout = 0;
+    state.subagentTitleSettleTimer = 0;
+  }
+
+  function armNativeSubagentTitleHook(target, timeoutMs = 5_000) {
+    stopNativeSubagentTitleHook();
+    // Codex mounts the child-agent detail surface as a sibling of the main
+    // thread, not inside it. Observe the renderer root only for this bounded
+    // navigation window so the title is rewritten in React's creation
+    // checkpoint, before the next paint.
+    const root = document.body;
+    if (!root || typeof MutationObserver !== "function") {
+      return syncNativeSubagentDetailTitle(target);
+    }
+    let matched = false;
+    const check = () => {
+      const title = findNativeSubagentDetailTitle(target);
+      if (!title) return false;
+      syncNativeSubagentDetailTitle(target);
+      if (!matched) {
+        matched = true;
+        state.subagentTitleSettleTimer = setTimeout(
+          stopNativeSubagentTitleHook,
+          900,
+        );
+      }
+      return true;
+    };
+    state.subagentTitleObserver = new MutationObserver(check);
+    state.subagentTitleObserver.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+    state.subagentTitleTimeout = setTimeout(
+      stopNativeSubagentTitleHook,
+      timeoutMs,
+    );
+    check();
+    return true;
+  }
+
+  function scheduleNativeSubagentLabelSync(attempts = 18) {
+    if (state.destroyed || !document.body) return;
+    state.subagentLabelAttempts = Math.max(state.subagentLabelAttempts, attempts);
+    if (state.subagentLabelFrame) return;
+    const attempt = () => {
+      state.subagentLabelFrame = 0;
+      const changed = syncNativeSubagentLabels();
+      const listObserved = connectNativeSubagentListObserver();
+      if (listObserved || changed > 0) {
+        state.subagentLabelAttempts = 0;
+        return;
+      }
+      state.subagentLabelAttempts -= 1;
+      if (state.subagentLabelAttempts > 0) {
+        state.subagentLabelFrame = requestAnimationFrame(attempt);
+      }
+    };
+    state.subagentLabelFrame = requestAnimationFrame(attempt);
+  }
+
+  function childAgentSummaryButton() {
+    return [...document.querySelectorAll(
+      'button[data-slot="thread-summary-panel-item-button"]',
+    )].find((button) => {
+      const rect = button.getBoundingClientRect();
+      return (
+        button.isConnected &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        Boolean(button.querySelector(
+          '[data-slot="thread-summary-panel-item-avatar-group"]',
+        ))
+      );
+    }) ?? null;
+  }
+
+  function waitForNativeSubagentButton(target, timeoutMs = 5_000) {
+    const immediate = findNativeSubagentButton(target);
+    if (immediate || !document.body) return Promise.resolve(immediate);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (button) => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(timeout);
+        resolve(button);
+      };
+      const check = () => {
+        const button = findNativeSubagentButton(target);
+        if (button) finish(button);
+      };
+      const observer = new MutationObserver(check);
+      const timeout = setTimeout(() => finish(null), timeoutMs);
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
+      check();
+    });
+  }
+
+  function nativeThreadRow(threadId) {
+    const normalized = normalizeThreadId(threadId);
+    if (!normalized) return null;
+    return [...document.querySelectorAll("[data-app-action-sidebar-thread-id]")]
+      .find((element) =>
+        normalizeThreadId(
+          element.getAttribute("data-app-action-sidebar-thread-id"),
+        ) === normalized
+      ) ?? null;
+  }
+
+  function setDetailActionFeedback(control, message, durationMs = 1_800) {
+    const label = control?.querySelector?.("span");
+    if (!label) return;
+    const previous = label.textContent;
+    label.textContent = message;
+    setTimeout(() => {
+      if (label.isConnected) label.textContent = previous;
+    }, durationMs);
+  }
+
+  async function openNativeSubagent(target, control = null) {
+    if (control?.disabled) return false;
+    if (control) control.disabled = true;
+    const parentThreadId = normalizeThreadId(state.activeThreadId);
+    let openedOverview = false;
+    try {
+      let button = findNativeSubagentButton(target);
+      if (!button && nativeSubagentRows().length === 0) {
+        const summaryButton = childAgentSummaryButton();
+        if (summaryButton) {
+          summaryButton.click();
+          openedOverview = true;
+        }
+      }
+      if (!button) button = await waitForNativeSubagentButton(target);
+      if (
+        state.destroyed ||
+        normalizeThreadId(state.activeThreadId) !== parentThreadId
+      ) {
+        return false;
+      }
+      if (!button) {
+        if (openedOverview) nativeThreadRow(parentThreadId)?.click();
+        setDetailActionFeedback(
+          control,
+          t("feedback.subagentNotReady"),
+        );
+        return false;
+      }
+      syncNativeSubagentLabel(target);
+      armNativeSubagentTitleHook(target);
+      stopNativeSubagentListObserver();
+      button.click();
+      scheduleNativeSubagentLabelSync(24);
+      requestAnimationFrame(() => {
+        if (!state.destroyed) {
+          closeWorkspaceDetail(true, true);
+          handleThreadSelection();
+        }
+      });
+      return true;
+    } finally {
+      if (control?.isConnected) control.disabled = false;
+    }
+  }

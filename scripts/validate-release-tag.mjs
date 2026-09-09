@@ -7,28 +7,33 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadata = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
 const version = metadata.spineAppVersion;
-const desktopVersion = metadata.codexDesktopVersion;
 const tag = process.argv[2];
+const semverFields = [
+  "minimumSpineCodexVersion",
+  "recommendedSpineCodexVersion",
+  "validatedCodexCompatibilityVersion",
+];
 
 if (typeof version !== "string" || !/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(version)) {
   throw new Error(`package.json spineAppVersion is invalid: ${String(version)}`);
 }
-if (typeof metadata.spineCodexVersion !== "string" ||
-    !/^\d+\.\d+\.\d+$/.test(metadata.spineCodexVersion)) {
-  throw new Error(
-    `package.json spineCodexVersion is invalid: ${String(metadata.spineCodexVersion)}`,
-  );
+for (const field of semverFields) {
+  if (typeof metadata[field] !== "string" || !/^\d+\.\d+\.\d+$/.test(metadata[field])) {
+    throw new Error(`package.json ${field} is invalid: ${String(metadata[field])}`);
+  }
 }
-if (typeof desktopVersion !== "string" ||
-    !/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(desktopVersion)) {
-  throw new Error(
-    `package.json codexDesktopVersion is invalid: ${String(desktopVersion)}`,
-  );
+if (metadata.version !== metadata.supportedDesktopVersion ||
+    !(version === metadata.supportedDesktopVersion || version.startsWith(`${metadata.supportedDesktopVersion}.`))) {
+  throw new Error("App release version must track supportedDesktopVersion");
 }
-if (version !== desktopVersion) {
-  throw new Error(
-    `release version ${version} must exactly match Codex Desktop ${desktopVersion}`,
-  );
+if (
+  !Array.isArray(metadata.validatedDesktopVersions) ||
+  metadata.validatedDesktopVersions.length === 0 ||
+  metadata.validatedDesktopVersions.some(
+    (value) => typeof value !== "string" || !/^\d+\.\d+\.\d+$/.test(value),
+  )
+) {
+  throw new Error("package.json validatedDesktopVersions is invalid");
 }
 if (tag != null && tag !== `v${version}`) {
   throw new Error(`tag ${String(tag)} does not match source version v${version}`);

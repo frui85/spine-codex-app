@@ -175,6 +175,7 @@ SpineCodex App
 ```sh
 git clone https://github.com/izumedonabe/spine-codex-app.git
 cd spine-codex-app
+npm run build:statusbar
 ./spine-app --diagnose
 ./spine-app
 ./spine-app /path/to/workspace
@@ -212,3 +213,9 @@ npm run build:windows
 Apache-2.0。参见 [LICENSE](LICENSE) 和[第三方声明](THIRD_PARTY_NOTICES.md)。
 
 <p align="center"><sub>独立项目，与 OpenAI 无隶属关系，也未获得 OpenAI 背书。</sub></p>
+
+## Desktop 26.901.51231 模式管理提案
+
+新增 macOS 原生状态栏，显示实际模式、Desktop/CLI 版本、适配基线和连接状态。默认保留官方的外部 adapter 架构；`--mode clone` 主动启用私有重签副本及主进程 hook，`--mode auto` 主动启用副本优先、外部兜底。切换会正常退出并重启本次 Desktop，新模式就绪后保存偏好，失败尝试恢复。外部模式不包含副本模式的回放/memory 恢复及 SSH bootstrap 增强。
+
+官方 SpineCodex `0.3.3 → Codex CLI 0.147.0`，补充支持 xiurui-pan fork `0.4.1 → 0.153.4`，官方更新后继续回归。可执行 `npm run regress:cli -- /path/to/spine-codex` 检查版本及协议。实测范围与限制见[提案发布说明](docs/RELEASE_NOTES_v26.901.51231_ZH.md)。该功能与版本元数据属于贡献提案，并非上游已经发布的新版本。

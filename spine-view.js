@@ -9,10 +9,23 @@
   const SPINE_STABLE_SETTINGS_FEATURES = new Set([
     "spine_jit",
     "spine_trim",
+    "spine_spawn",
   ]);
   const SETTINGS_SECTION_ID = "spine-codex-settings";
+  const LOCAL_IDENTITY_GLOBAL = "__spineCodexLocalIdentityV1";
   const SNAPSHOT_CACHE_KEY = "spine-codex.view.snapshots.v1";
   const THREAD_ALIASES_KEY = "spine-codex.view.thread-aliases";
+  const REPLAY_ALIASES_KEY = "spine-codex.view.replay-aliases.v1";
+  const REPLAY_RECOVERY_MESSAGE = "spine-thread-replay-recover";
+  const REPLAY_ALIAS_SYNC_MESSAGE = "spine-thread-replay-aliases-sync";
+  const APP_SERVER_VIEW_EVENT = "codex-message-from-view";
+  const REPLAY_ALIAS_CACHE_VERSION = 1;
+  const REPLAY_ALIAS_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1_000;
+  const DURABILITY_REPLAY_MISMATCH_PATTERN =
+    /Spine durability is faulted:\s*Spine replay failed:\s*sampling commit does not match its sampling-started record/;
+  const SPINE_MEMORY_OVERFLOW_PATTERN =
+    /^(?:Fatal error:\s*)?(?:Spine durability is faulted:\s*)?Spine context plan failed:\s*Spine memory fragment is ([1-9]\d*) bytes; maximum is 8000$/;
+  const THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const SPAWN_INTENT_CACHE_KEY = "spine-codex.view.spawn-intents.v1";
   const SNAPSHOT_CACHE_VERSION = 1;
   const SPAWN_INTENT_CACHE_VERSION = 1;
@@ -29,8 +42,8 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "26.901.20858";
-  const RENDERER_REVISION = 11;
+  const VERSION = "26.901.51231";
+  const RENDERER_REVISION = 12;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -134,6 +147,12 @@
     "settings.retry": "Retry",
     "settings.applies": "Changes apply only to new conversations.",
     "settings.toggle": "Toggle {label}",
+    "settings.hostIdentity": "{host} · SpineCodex {product} · Codex compatibility {compatibility}",
+    "settings.featureStatus": "Spawn default: {spawn} · Memory Projection: {memory}",
+    "settings.notReported": "not reported by host",
+    "settings.on": "On",
+    "settings.off": "Off",
+    "settings.notAvailable": "Unavailable",
     "feature.spine_jit.label": "Spine JIT",
     "feature.spine_jit.description": "Enable Spine task trees, node lifecycles, and context projection.",
     "feature.spine_trim.label": "Spine Trim",
@@ -221,6 +240,12 @@
       "settings.retry": "重试",
       "settings.applies": "更改只对新对话生效。",
       "settings.toggle": "切换 {label}",
+      "settings.hostIdentity": "{host} · SpineCodex {product} · Codex 兼容身份 {compatibility}",
+      "settings.featureStatus": "Spawn 默认：{spawn} · Memory Projection：{memory}",
+      "settings.notReported": "主机未报告",
+      "settings.on": "开",
+      "settings.off": "关",
+      "settings.notAvailable": "不可用",
       "feature.spine_jit.label": "Spine JIT",
       "feature.spine_jit.description": "启用 Spine 任务树、节点生命周期与上下文投影机制。",
       "feature.spine_trim.label": "Spine Trim",
@@ -978,6 +1003,11 @@
     expandedEpochs: new Set(),
     expandedSubtrees: new Set(),
     threadAliases: readThreadAliases(),
+    replayAliases: readReplayAliases(),
+    pendingResumeRequests: new Map(),
+    recoveringResumeRequests: new Map(),
+    failedRecoveryIds: new Set(),
+    lastReplayRecovery: null,
     pendingSidebarRaw: null,
     pendingPreviousMainId: null,
     expanded: readExpandedState(),
@@ -1089,6 +1119,50 @@
         THREAD_ALIASES_KEY,
         JSON.stringify(Object.fromEntries(state.threadAliases)),
       );
+    } catch {}
+  }
+
+  function readReplayAliases() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(REPLAY_ALIASES_KEY) || "null");
+      if (saved?.version !== REPLAY_ALIAS_CACHE_VERSION || !Array.isArray(saved.entries)) {
+        return new Map();
+      }
+      const cutoff = Date.now() - REPLAY_ALIAS_MAX_AGE_MS;
+      const aliases = new Map();
+      for (const entry of saved.entries) {
+        const source = entry?.source;
+        const target = entry?.target;
+        const updatedAt = Number(entry?.updatedAt);
+        if (
+          isReplayThreadId(source) &&
+          isReplayThreadId(target) &&
+          source !== target &&
+          Number.isFinite(updatedAt) &&
+          updatedAt >= cutoff
+        ) {
+          aliases.set(source, { target, updatedAt });
+        }
+      }
+      while (aliases.size > MAX_THREAD_ALIASES) {
+        aliases.delete(aliases.keys().next().value);
+      }
+      return aliases;
+    } catch {
+      return new Map();
+    }
+  }
+
+  function writeReplayAliases() {
+    try {
+      localStorage.setItem(REPLAY_ALIASES_KEY, JSON.stringify({
+        version: REPLAY_ALIAS_CACHE_VERSION,
+        entries: [...state.replayAliases].map(([source, entry]) => ({
+          source,
+          target: entry.target,
+          updatedAt: entry.updatedAt,
+        })),
+      }));
     } catch {}
   }
 
@@ -1579,6 +1653,237 @@
     if (normalized.startsWith("client-new-thread:")) return null;
     const match = normalized.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     return match?.[0] ?? (normalized || null);
+  }
+
+  function isReplayThreadId(value) {
+    return THREAD_ID_PATTERN.test(String(value ?? ""));
+  }
+
+  function isRecoverableSpineFailure(value) {
+    const message = String(value ?? "");
+    if (DURABILITY_REPLAY_MISMATCH_PATTERN.test(message)) return true;
+    const overflow = message.match(SPINE_MEMORY_OVERFLOW_PATTERN);
+    return overflow != null && Number(overflow[1]) > 8_000;
+  }
+
+  function replayAliasEntries() {
+    return [...state.replayAliases].map(([source, entry]) => [source, entry.target]);
+  }
+
+  function syncReplayAliases() {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
+    const bridge = window.electronBridge;
+    if (typeof bridge?.sendMessageFromView !== "function") return false;
+    Promise.resolve(bridge.sendMessageFromView({
+      type: REPLAY_ALIAS_SYNC_MESSAGE,
+      hostId: "local",
+      aliases: replayAliasEntries(),
+    })).catch((error) => {
+      state.lastReplayRecovery = {
+        status: "alias-sync-failed",
+        message: String(error?.message ?? error),
+      };
+    });
+    return true;
+  }
+
+  function rememberReplayAlias(source, target) {
+    if (
+      !isReplayThreadId(source) ||
+      !isReplayThreadId(target) ||
+      source === target
+    ) return false;
+    state.replayAliases.delete(source);
+    state.replayAliases.set(source, { target, updatedAt: Date.now() });
+    while (state.replayAliases.size > MAX_THREAD_ALIASES) {
+      state.replayAliases.delete(state.replayAliases.keys().next().value);
+    }
+    writeReplayAliases();
+    syncReplayAliases();
+    return true;
+  }
+
+  function replaySourceThreadId(target) {
+    for (const [source, entry] of state.replayAliases) {
+      if (entry.target === target) return source;
+    }
+    return null;
+  }
+
+  function rewriteIncomingReplayThreadIds(data) {
+    if (!data || typeof data !== "object" || state.replayAliases.size === 0) {
+      return false;
+    }
+    let changed = false;
+    const rewrite = (holder, key) => {
+      const source = replaySourceThreadId(holder?.[key]);
+      if (!source) return;
+      try {
+        holder[key] = source;
+        changed = true;
+      } catch {}
+    };
+    rewrite(data, "threadId");
+    rewrite(data.params, "threadId");
+    rewrite(data.params?.thread, "id");
+    const response = data.message ?? data.response;
+    rewrite(response?.result, "threadId");
+    rewrite(response?.result?.thread, "id");
+    return changed;
+  }
+
+  function rememberOutgoingResume(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return;
+    const message = event?.detail;
+    const request = message?.request;
+    const requestId = request?.id == null ? null : String(request.id);
+    const threadId = request?.params?.threadId;
+    if (
+      message?.type !== "mcp-request" ||
+      message.hostId !== "local" ||
+      request?.method !== "thread/resume" ||
+      request.params?.history != null ||
+      !requestId ||
+      !isReplayThreadId(threadId)
+    ) return;
+    state.pendingResumeRequests.delete(requestId);
+    state.pendingResumeRequests.set(requestId, {
+      hostId: message.hostId,
+      request: {
+        ...request,
+        params: { ...request.params },
+      },
+    });
+    state.failedRecoveryIds.delete(requestId);
+    while (state.pendingResumeRequests.size > MAX_THREAD_ALIASES) {
+      state.pendingResumeRequests.delete(state.pendingResumeRequests.keys().next().value);
+    }
+  }
+
+  function replayResponse(data) {
+    if (data?.type !== "mcp-response") return null;
+    return data.message ?? data.response ?? null;
+  }
+
+  function redispatchReplayFailure(data) {
+    if (typeof window.postMessage !== "function") return;
+    queueMicrotask(() => window.postMessage(data, "*"));
+  }
+
+  function requestReplayRecovery(requestId, pending, errorMessage, originalData) {
+    const bridge = window.electronBridge;
+    if (
+      typeof bridge?.sendMessageFromView !== "function" ||
+      state.recoveringResumeRequests.size !== 0
+    ) return false;
+    state.recoveringResumeRequests.set(requestId, {
+      threadId: pending.request.params.threadId,
+      startedAt: Date.now(),
+    });
+    state.lastReplayRecovery = {
+      status: "recovering",
+      threadId: pending.request.params.threadId,
+    };
+    Promise.resolve(bridge.sendMessageFromView({
+      type: REPLAY_RECOVERY_MESSAGE,
+      hostId: pending.hostId,
+      request: pending.request,
+      errorMessage,
+    })).catch((error) => {
+      state.recoveringResumeRequests.delete(requestId);
+      state.pendingResumeRequests.delete(requestId);
+      state.failedRecoveryIds.add(requestId);
+      state.lastReplayRecovery = {
+        status: "failed",
+        threadId: pending.request.params.threadId,
+        message: String(error?.message ?? error),
+      };
+      console.error("[SpineCodex] App-level replay recovery failed:", error);
+      redispatchReplayFailure(originalData);
+    });
+    return true;
+  }
+
+  function adoptReplayAliasFromStatusNotification(data) {
+    if (
+      data?.type !== "mcp-notification" ||
+      data.method !== "thread/status/changed" ||
+      state.recoveringResumeRequests.size !== 1
+    ) return false;
+    const [[, recovering]] = state.recoveringResumeRequests;
+    const actualThreadId = data.params?.threadId;
+    if (
+      Date.now() - recovering.startedAt > 10_000 ||
+      !isReplayThreadId(actualThreadId) ||
+      actualThreadId === recovering.threadId ||
+      replaySourceThreadId(actualThreadId) != null
+    ) return false;
+    const remembered = rememberReplayAlias(recovering.threadId, actualThreadId);
+    if (remembered) {
+      state.lastReplayRecovery = {
+        status: "recovering",
+        threadId: recovering.threadId,
+        actualThreadId,
+      };
+    }
+    return remembered;
+  }
+
+  function handleReplayRecoveryMessage(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
+    const data = event?.data;
+    adoptReplayAliasFromStatusNotification(data);
+    const response = replayResponse(data);
+    const requestId = response?.id == null ? null : String(response.id);
+    const pending = requestId ? state.pendingResumeRequests.get(requestId) : null;
+    const recovering = requestId
+      ? state.recoveringResumeRequests.get(requestId)
+      : null;
+    const errorMessage = response?.error?.message ?? "";
+
+    if (
+      pending &&
+      isRecoverableSpineFailure(errorMessage) &&
+      !recovering &&
+      !state.failedRecoveryIds.has(requestId) &&
+      requestReplayRecovery(requestId, pending, errorMessage, data)
+    ) {
+      event.stopImmediatePropagation?.();
+      return true;
+    }
+
+    if (recovering && response) {
+      state.recoveringResumeRequests.delete(requestId);
+      state.pendingResumeRequests.delete(requestId);
+      if (response.error) {
+        state.failedRecoveryIds.add(requestId);
+        state.lastReplayRecovery = {
+          status: "failed",
+          threadId: recovering.threadId,
+          message: String(response.error.message ?? "App Server recovery failed"),
+        };
+      } else {
+        const actualThreadId = response.result?.thread?.id;
+        if (rememberReplayAlias(recovering.threadId, actualThreadId)) {
+          state.lastReplayRecovery = {
+            status: "recovered",
+            threadId: recovering.threadId,
+            actualThreadId,
+          };
+        } else {
+          state.lastReplayRecovery = {
+            status: "failed",
+            threadId: recovering.threadId,
+            message: "Recovery response did not contain a new thread ID",
+          };
+        }
+      }
+    } else if (response && pending && !isRecoverableSpineFailure(errorMessage)) {
+      state.pendingResumeRequests.delete(requestId);
+    }
+
+    rewriteIncomingReplayThreadIds(data);
+    return false;
   }
 
   function mainThreadId() {
@@ -4959,6 +5264,75 @@
       }));
   }
 
+  function validSettingsVersion(value) {
+    return typeof value === "string" && /^\d+\.\d+\.\d+$/.test(value)
+      ? value
+      : null;
+  }
+
+  function localSettingsIdentity() {
+    const identity = globalThis[LOCAL_IDENTITY_GLOBAL];
+    if (!identity || typeof identity !== "object") {
+      return { productVersion: null, compatibilityVersion: null };
+    }
+    return {
+      productVersion: validSettingsVersion(identity.productVersion),
+      compatibilityVersion: validSettingsVersion(identity.compatibilityVersion),
+    };
+  }
+
+  function settingsStatusModel(hostId, features = state.settingsFeatures) {
+    const normalizedHostId = typeof hostId === "string" && hostId
+      ? hostId.slice(0, 256)
+      : "local";
+    const selected = features instanceof Map
+      ? features
+      : new Map(
+          selectSpineSettingsFeatures(features)
+            .map((feature) => [feature.name, feature]),
+        );
+    const spawn = selected.get("spine_spawn");
+    const memory = selected.get("spinetree_memory_projection");
+    const identity = normalizedHostId === "local"
+      ? localSettingsIdentity()
+      : { productVersion: null, compatibilityVersion: null };
+    return {
+      hostId: normalizedHostId,
+      productVersion: identity.productVersion,
+      compatibilityVersion: identity.compatibilityVersion,
+      spawnDefaultEnabled: spawn ? spawn.defaultEnabled === true : null,
+      spawnEnabled: spawn ? spawn.enabled === true : null,
+      memoryProjectionEnabled: memory ? memory.enabled === true : null,
+    };
+  }
+
+  function settingsHostLabel(hostId) {
+    if (hostId === "local") return t("host.local");
+    return hostId.split(":").pop()?.trim() || hostId;
+  }
+
+  function settingsBooleanLabel(value) {
+    return value == null
+      ? t("settings.notAvailable")
+      : t(value ? "settings.on" : "settings.off");
+  }
+
+  function settingsIdentityText(status) {
+    return t("settings.hostIdentity", {
+      host: settingsHostLabel(status.hostId),
+      product: status.productVersion ?? t("settings.notReported"),
+      compatibility:
+        status.compatibilityVersion ?? t("settings.notReported"),
+    });
+  }
+
+  function settingsFeatureStatusText(status) {
+    return t("settings.featureStatus", {
+      spawn: settingsBooleanLabel(status.spawnDefaultEnabled),
+      memory: settingsBooleanLabel(status.memoryProjectionEnabled),
+    });
+  }
+
   function activeAgentSettingsPanel() {
     return document.querySelector?.(
       'button[data-settings-panel-slug="agent"][aria-current="page"]',
@@ -5203,7 +5577,17 @@
       "font-medium text-token-text-primary text-base",
       copy.title,
     );
-    headerStack.append(title);
+    const hostStatus = createElement(
+      "div",
+      "min-w-0 break-words text-xs leading-4 text-token-text-secondary",
+    );
+    hostStatus.dataset.spineSettingsHostStatus = "true";
+    const featureStatus = createElement(
+      "div",
+      "min-w-0 break-words text-xs leading-4 text-token-text-tertiary",
+    );
+    featureStatus.dataset.spineSettingsFeatureStatus = "true";
+    headerStack.append(title, hostStatus, featureStatus);
     header.append(headerStack);
 
     const content = createElement("div", "flex flex-col gap-1.5");
@@ -5232,6 +5616,8 @@
     state.settingsSavedFeature = null;
     state.settingsUi = {
       title,
+      hostStatus,
+      featureStatus,
       card,
     };
     renderSettings();
@@ -5347,6 +5733,10 @@
     if (!ui || !state.settingsSection?.isConnected) return;
     const copy = settingsCopy();
     ui.title.textContent = copy.title;
+    const status = settingsStatusModel(state.settingsHostId ?? "local");
+    ui.hostStatus.textContent = settingsIdentityText(status);
+    ui.hostStatus.title = status.hostId;
+    ui.featureStatus.textContent = settingsFeatureStatusText(status);
     let rows;
     if (state.settingsLoading) rows = [createSettingsStatusRow(copy.loading)];
     else if (state.settingsError) rows = [createSettingsStatusRow(copy.error, true)];
@@ -5384,6 +5774,11 @@
       return;
     }
     const epoch = ++state.settingsRequestEpoch;
+    if (state.settingsLoadedHostId !== hostId) {
+      state.settingsFeatures = new Map();
+      state.settingsAvailable = false;
+      state.settingsLoadedHostId = null;
+    }
     state.settingsHostId = hostId;
     state.settingsLoading = true;
     state.settingsError = null;
@@ -5580,6 +5975,7 @@
 
   function onMessage(event) {
     const data = event.data;
+    if (handleReplayRecoveryMessage(event)) return;
     const settledFetch = settleCodexFetchResponse(data);
     const settledAppServer = settleAppServerResponse(data);
     if (!settledFetch && !settledAppServer) ingest(data);
@@ -5825,6 +6221,7 @@
     startStartupThreadSync();
     connectSummarySurfaceObserver();
     loadHostCatalog();
+    syncReplayAliases();
     scheduleMount(60);
     scheduleSettingsMount(30);
     scheduleNativeSubagentLabelSync(24);
@@ -5848,18 +6245,26 @@
     stopNativeSubagentListObserver();
     stopNativeSubagentTitleHook();
     state.threadAliases.clear();
+    state.replayAliases.clear();
+    syncReplayAliases();
+    state.pendingResumeRequests.clear();
+    state.recoveringResumeRequests.clear();
+    state.failedRecoveryIds.clear();
+    state.lastReplayRecovery = null;
     state.rows.clear();
     closeWorkspaceDetail(false, true);
     try {
       localStorage.removeItem(SNAPSHOT_CACHE_KEY);
       localStorage.removeItem(SPAWN_INTENT_CACHE_KEY);
       localStorage.removeItem(THREAD_ALIASES_KEY);
+      localStorage.removeItem(REPLAY_ALIASES_KEY);
     } catch {}
     renderActiveNow();
     return true;
   }
 
   window.addEventListener("message", onMessage, true);
+  window.addEventListener(APP_SERVER_VIEW_EVENT, rememberOutgoingResume, true);
   window.addEventListener("resize", onResize, { passive: true });
   window.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("click", onSidebarClick, true);
@@ -5908,6 +6313,10 @@
       subagentLabelSyncPending: state.subagentLabelFrame !== 0,
       subagentListObserved: Boolean(state.subagentListObserver),
       subagentTitleHookPending: Boolean(state.subagentTitleObserver),
+      replayRecoveryAliases: state.replayAliases.size,
+      replayRecoveryPending: state.pendingResumeRequests.size,
+      replayRecoveryInFlight: state.recoveringResumeRequests.size,
+      lastReplayRecovery: state.lastReplayRecovery,
     }),
     exportSnapshots: () => [...state.snapshots.values()],
     exportSpawnIntents: () => [...state.spawnIntents.entries()].map(
@@ -5956,6 +6365,7 @@
       return true;
     },
     selectSettingsFeatures: (features) => selectSpineSettingsFeatures(features),
+    settingsStatus: (hostId, features) => settingsStatusModel(hostId, features),
     resolveLocale: resolveCodexLocale,
     translate: (key, values) => t(key, values),
     refreshLocale,
@@ -5968,6 +6378,7 @@
     destroy: () => {
       state.destroyed = true;
       window.removeEventListener("message", onMessage, true);
+      window.removeEventListener(APP_SERVER_VIEW_EVENT, rememberOutgoingResume, true);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("languagechange", onLanguageChange);

@@ -1,0 +1,44 @@
+name: Contribution Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['contrib/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contribution-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: Check and build both macOS architectures
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - name: Build DMGs without publishing a release
+        run: npm run build:macos
+      - name: Verify DMGs and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in dist/*.dmg; do hdiutil verify "$image"; done
+          (cd dist && shasum -a 256 -c ./*.sha256)
+          test "$(find dist -maxdepth 1 -name '*.dmg' | wc -l | tr -d ' ')" = "2"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contribution-macos-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 7

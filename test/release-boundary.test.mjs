@@ -4,6 +4,9 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 const metadata = JSON.parse(await readFile(new URL("package.json", root), "utf8"));
+const compatibility = JSON.parse(
+  await readFile(new URL("compatibility.json", root), "utf8"),
+);
 const launcher = await readFile(new URL("spine-app.mjs", root), "utf8");
 const renderer = await readFile(new URL("spine-view.js", root), "utf8");
 const mainHook = await readFile(
@@ -28,48 +31,116 @@ const mainInspector = await readFile(
   new URL("lib/main-inspector.mjs", root),
   "utf8",
 );
-const rendererSupervisor = await readFile(
-  new URL("lib/renderer-supervisor.mjs", root),
+const mainHookReadiness = await readFile(
+  new URL("lib/main-hook-readiness.mjs", root),
   "utf8",
 );
 const appServerProtocolAdapter = await readFile(
   new URL("lib/app-server-protocol-adapter.mjs", root),
   "utf8",
 );
+const inspectorClone = await readFile(
+  new URL("lib/macos-inspector-clone.mjs", root),
+  "utf8",
+);
 
-test("release version exactly tracks the supported Codex Desktop version", () => {
-  assert.equal(metadata.version, "26.901.20858");
-  assert.equal(metadata.spineAppVersion, "26.901.20858");
-  assert.equal(metadata.codexDesktopVersion, "26.901.20858");
-  assert.equal(metadata.spineCodexVersion, "0.3.3");
-  assert.match(launcher, /APP_VERSION = "26\.901\.20858"/);
-  assert.match(launcher, /SUPPORTED_DESKTOP_VERSION = "26\.901\.20858"/);
+test("wrapper 26.901.51231 separates minimum, recommended, and compatibility identities", () => {
+  assert.equal(metadata.version, "26.901.51231");
+  assert.equal(metadata.spineAppVersion, "26.901.51231");
+  assert.equal(metadata.minimumSpineCodexVersion, "0.2.2");
+  assert.equal(metadata.recommendedSpineCodexVersion, "0.3.3");
+  assert.equal(metadata.validatedCodexCompatibilityVersion, "0.147.0");
+  assert.deepEqual(metadata.validatedDesktopVersions, [
+    "26.810.41047",
+    "26.818.41509",
+    "26.825.51511",
+    "26.901.20858",
+    "26.901.51231",
+  ]);
+  assert.match(launcher, /APP_VERSION = "26\.901\.51231"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
-  assert.match(launcher, /MIN_CODEX_APP_SERVER_VERSION = "0\.141\.0"/);
-  assert.match(launcher, /MIN_SPINE_CODEX_RELEASE = "0\.3\.3"/);
-  assert.match(renderer, /VERSION = "26\.901\.20858"/);
-  assert.match(launcher, /verified exact match/);
-  assert.match(launcher, /unverified with release/);
+  assert.match(launcher, /RECOMMENDED_SPINE_CODEX_VERSION = "0\.3\.3"/);
+  assert.match(launcher, /VALIDATED_CODEX_COMPATIBILITY_VERSION = "0\.147\.0"/);
+  assert.match(renderer, /VERSION = "26\.901\.51231"/);
+  assert.equal(compatibility.spineCodexAppVersion, metadata.spineAppVersion);
+  assert.deepEqual(compatibility.local, {
+    minimumSpineCodexVersion: metadata.minimumSpineCodexVersion,
+    recommendedSpineCodexVersion: metadata.recommendedSpineCodexVersion,
+    validatedCodexCompatibilityVersion: metadata.validatedCodexCompatibilityVersion,
+  });
+  assert.equal(
+    compatibility.remote.minimumSpineCodexVersion,
+    metadata.minimumSpineCodexVersion,
+  );
+  assert.deepEqual(
+    compatibility.codexDesktop.validatedVersions,
+    metadata.validatedDesktopVersions,
+  );
+  assert.deepEqual(compatibility.notValidated[0], {
+    component: "OpenAI Codex",
+    version: "0.149.1",
+    reason: "not a SpineCodex compatibility baseline",
+  });
+});
+
+test("launcher prepares a private inspectable clone when the macOS Inspector fuse is off", () => {
+  assert.match(launcher, /from "\.\/lib\/macos-inspector-clone\.mjs"/);
+  assert.match(launcher, /prepareInspectableDesktopClone\(\{/);
+  assert.match(launcher, /diagnosis\.inspectableClone\?\.required/);
+  assert.match(launcher, /appPath: launchAppPath,/);
+  assert.match(launcher, /`--inspect-brk=127\.0\.0\.1:\$\{mainInspectorPort\}`/);
+  assert.match(launcher, /isCloneDisabled\(process\.env\)/);
+  assert.match(launcher, /bundle stays unmodified/);
+  assert.match(launcher, /could not prepare an inspectable Codex Desktop clone/);
+  assert.match(launcher, /inspectableClone: diagnosis\.inspectableClone/);
+  assert.match(launcher, /candidate\.startsWith\(`\$\{cloneRoot\}\/`\)/);
+  assert.doesNotMatch(launcher, /SIGUSR1"\)/);
+  assert.doesNotMatch(launcher, /--inspect-port=/);
+  assert.doesNotMatch(launcher, /function delay\(/);
+  assert.match(builder, /lib", "macos-inspector-clone\.mjs/);
+  assert.match(windowsBuilder, /lib", "macos-inspector-clone\.mjs/);
+  assert.match(inspectorClone, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
+  assert.match(inspectorClone, /"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX"/);
+  assert.match(inspectorClone, /\["removed", 0x72\]/);
+  assert.match(inspectorClone, /"--verify", "--deep", "--strict"/);
+  assert.match(inspectorClone, /"--options",\s*"runtime"/);
+  assert.match(inspectorClone, /RESTRICTED_ENTITLEMENT_PREFIX = "com\.apple\.developer\."/);
+  assert.match(inspectorClone, /\["-c", "-R", source, destination\]/);
+  assert.match(inspectorClone, /inspectable-desktop/);
 });
 
 test("release builder bundles only wrapper files and a pinned Node runtime", () => {
+  assert.equal(
+    metadata.scripts["build:macos"],
+    "node scripts/build-renderer.mjs --check && node scripts/build-macos-release.mjs --all",
+  );
   assert.match(builder, /NODE_VERSION = "v22\.23\.2"/);
   assert.match(builder, /metadata\.spineAppVersion/);
   assert.match(builder, /valueAfter\("--version"\)/);
   assert.match(builder, /nodejs\.org\/dist/);
   assert.match(builder, /\/usr\/bin\/qlmanage/);
+  assert.match(builder, /"compatibility\.json"/);
+  assert.match(builder, /lib", "spine-codex-compatibility\.mjs/);
+  assert.match(builder, /lib", "desktop-bundle-contract\.mjs/);
+  assert.match(builder, /lib", "main-hook-readiness\.mjs/);
+  assert.match(builder, /await rm\(extracted, \{ recursive: true, force: true \}\)/);
+  assert.match(builder, /await rm\(nodeArchive, \{ force: true \}\)/);
+  assert.match(builder, /await rm\(app, \{ recursive: true, force: true \}\)/);
   assert.doesNotMatch(builder, /@spinejit|GhabiX|SpineCodex\/releases|npm pack/);
   assert.deepEqual(metadata.dependencies, undefined);
   assert.deepEqual(metadata.optionalDependencies, undefined);
 });
 
 test("Windows portable build contains native launchers but no upstream binary", () => {
-  assert.equal(metadata.scripts["build:windows"], "node scripts/build-windows-release.mjs --arch x64");
+  assert.equal(
+    metadata.scripts["build:windows"],
+    "node scripts/build-renderer.mjs --check && node scripts/build-windows-release.mjs --arch x64",
+  );
   assert.match(windowsBuilder, /NODE_VERSION = "v22\.23\.2"/);
   assert.match(windowsBuilder, /metadata\.spineAppVersion/);
   assert.match(
     windowsBuilder,
-    /MIN_SPINE_CODEX_VERSION = metadata\.spineCodexVersion/,
+    /MIN_SPINE_CODEX_VERSION = metadata\.minimumSpineCodexVersion/,
   );
   assert.match(
     windowsBuilder,
@@ -95,16 +166,20 @@ test("Windows portable build contains native launchers but no upstream binary", 
   assert.match(macosCliShim, /SPINE_CODEX_SHIM_NODE/);
   assert.match(macosCliShim, /spine-codex\.mjs/);
   assert.match(windowsBuilder, /lib", "main-inspector\.mjs/);
-  assert.match(windowsBuilder, /lib", "renderer-supervisor\.mjs/);
+  assert.match(windowsBuilder, /lib", "main-hook-readiness\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-output-filter\.mjs/);
   assert.match(windowsBuilder, /lib", "app-server-protocol-adapter\.mjs/);
+  assert.match(windowsBuilder, /lib", "spine-codex-compatibility\.mjs/);
+  assert.match(windowsBuilder, /lib", "desktop-bundle-contract\.mjs/);
+  assert.match(windowsBuilder, /"compatibility\.json"/);
   assert.match(builder, /lib", "app-server-protocol-adapter\.mjs/);
-  assert.match(builder, /lib", "renderer-supervisor\.mjs/);
   assert.match(appServerProtocolAdapter, /APP_INSTALLED_METHOD = "app\/installed"/);
   assert.match(appServerProtocolAdapter, /APP_READ_METHOD = "app\/read"/);
   assert.match(appServerProtocolAdapter, /APP_LIST_METHOD = "app\/list"/);
   assert.match(launcher, /--inspect-brk=127\.0\.0\.1:/);
   assert.match(launcher, /injectMainProcessHook/);
+  assert.match(launcher, /needsMainProcessInspector/);
+  assert.match(launcher, /resolveMacOsExecutable/);
   assert.match(mainInspector, /Debugger\.evaluateOnCallFrame/);
   assert.match(mainInspector, /Debugger\.resume/);
 });
@@ -112,23 +187,24 @@ test("Windows portable build contains native launchers but no upstream binary", 
 test("no-argument launch does not create a root workspace task", () => {
   assert.match(launcher, /workspace: null/);
   assert.match(launcher, /args\.workspace == null\s*\? null/);
-  assert.match(launcher, /if \(deepLink\) openArguments\.push\(deepLink\)/);
+  assert.match(launcher, /\.\.\.\(deepLink \? \[deepLink\] : \[\]\)/);
 });
 
 test("renderer injection survives Electron renderer replacement", () => {
-  assert.match(launcher, /await superviseRenderer\(/);
-  assert.match(rendererSupervisor, /Page\.addScriptToEvaluateOnNewDocument/);
-  assert.match(rendererSupervisor, /Page\.loadEventFired/);
-  assert.match(rendererSupervisor, /window\.__spineCodexSupervisorRevision/);
-  assert.match(rendererSupervisor, /MAIN_RENDERER_ORIGIN = "app:\/\/-"/);
-  assert.match(rendererSupervisor, /AVATAR_OVERLAY_ROUTE = "\/avatar-overlay"/);
-  assert.match(rendererSupervisor, /lastEndpointSuccess/);
-  assert.doesNotMatch(rendererSupervisor, /setInterval\(/);
-
-  // Windows retains the older main-hook recovery path until its CLI selector
-  // can also move to the external boundary.
+  assert.match(launcher, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
+  assert.match(
+    launcher,
+    /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/,
+  );
+  assert.match(
+    launcher,
+    /SPINE_CODEX_SHIM_NODE: process\.execPath/,
+  );
   assert.match(mainHook, /SPINE_CODEX_LOCAL_CLI_PATH/);
   assert.match(mainHook, /patchLocalCliSelectorSource/);
+  assert.match(launcher, /SPINE_CODEX_RENDERER_PATH:/);
+  assert.match(launcher, /SPINE_CODEX_RENDERER_SHA256:/);
+  assert.match(mainHookReadiness, /rendererRecovery !== true/);
   assert.match(mainHook, /web-contents-created/);
   assert.match(mainHook, /did-finish-load/);
   assert.match(mainHook, /executeJavaScript\(payload\.source, false\)/);
@@ -137,19 +213,7 @@ test("renderer injection survives Electron renderer replacement", () => {
   assert.match(mainHook, /initialRoute/);
   assert.match(mainHook, /\/avatar-overlay/);
   assert.match(mainHook, /SHA-256 mismatch/);
-});
-
-test("macOS selects the local adapter without changing the SSH command", () => {
-  assert.match(launcher, /CODEX_CLI_PATH: REMOTE_CLI_NAME/);
-  assert.match(launcher, /await createMacShellEnvironment\(LOCAL_CLI_DIR\)/);
-  assert.match(launcher, /ZDOTDIR/);
-  assert.match(
-    launcher,
-    /export PATH="\\\$\{_spine_app_adapter_dir\}:\\\$\{PATH:-\}"/,
-  );
-  assert.match(launcher, /no Electron main-process hook required/);
-  assert.match(windowsCliShim, /findSpineCodexBinary/);
-  assert.match(windowsCliShim, /dirname\(candidate\) === ownDirectory/);
+  assert.doesNotMatch(mainHook, /setInterval\(/);
 });
 
 test("local dependency paths are discovered without translated UI labels", () => {
@@ -166,7 +230,16 @@ test("local dependency paths are discovered without translated UI labels", () =>
   assert.match(launcher, /process\.platform === "win32"/);
   assert.match(launcher, /Inspector fuse marker \$\{nodeCliInspectFuse\}; runtime injection required/);
   assert.match(launcher, /!\["off", "removed"\]\.includes\(nodeCliInspectFuse\)/);
+  assert.match(launcher, /Electron main-process Inspector fuse is \$\{nodeCliInspectFuse\}/);
+  assert.match(launcher, /request a graceful stop before any fallback/);
   assert.match(launcher, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
   assert.match(launcher, /Codex was not allowed to/);
-  assert.match(launcher, /await superviseRenderer\(/);
+  assert.match(launcher, /timeoutMs: 20_000/);
+  assert.match(launcher, /progressGraceMs: 10_000/);
+  assert.match(launcher, /hardTimeoutMs: 30_000/);
+  assert.match(launcher, /finalGraceMs: 500/);
+  assert.match(mainHookReadiness, /MAIN_HOOK_PROGRESS_STATES/);
+  assert.match(mainHookReadiness, /main-process hook loaded/);
+  assert.match(mainHookReadiness, /main-process preload did not report startup/);
+  assert.doesNotMatch(mainHookReadiness, /no renderer code was injected/);
 });

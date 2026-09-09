@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "spineCodexProductVersion": "0.3.3",
+  "codexCompatibilityVersion": "0.147.0",
+  "generatedBy": "spine-codex app-server generate-json-schema --experimental",
+  "files": {
+    "SpineTreeUpdatedNotification.json": {
+      "sha256": "4a1f9f4051367ee886a8364aeddba2bfe0e082878e10eb7d974a3daa3c79f236"
+    },
+    "SpineSpawnProgressUpdatedNotification.json": {
+      "sha256": "3a7f538c025109d1c6bfc51270f19b0642aa31dc97be66b9fcbefc19bbc66c2a"
+    }
+  }
+}

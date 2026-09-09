@@ -1,0 +1,602 @@
+  function activePath(snapshot, byId) {
+    const path = new Set();
+    let current = snapshot.activeNodeId;
+    while (current && !path.has(current)) {
+      path.add(current);
+      current = byId.get(current)?.parentId ?? null;
+    }
+    return path;
+  }
+
+  function nodeVisual(node, active, hasChildren) {
+    if (active || node.status === "live") return ["running", "live"];
+    if (node.spawnOutcome === "errored") return ["error", "error"];
+    if (node.spawnOutcome === "aborted") return ["warning", "warning"];
+    if (node.spawnOutcome === "completed" || node.status === "closed") return ["check", "done"];
+    if (node.status === "compacted") return ["history", "muted"];
+    return hasChildren ? ["branch", "muted"] : ["idle", "muted"];
+  }
+
+  function nodeLabel(node, active) {
+    const summary = typeof node.summary === "string" ? node.summary.trim() : "";
+    if (summary) return summary;
+    if (active || node.status === "live") return t("task.current");
+    if (node.status === "closed") return t("task.completed");
+    if (node.status === "compacted") return t("task.previous");
+    return t("task.generic");
+  }
+
+  function mergeBuckets(items, scopeKey) {
+    const merged = [];
+    for (const item of items) {
+      const previous = merged[merged.length - 1];
+      if (item.kind === "bucket" && previous?.kind === "bucket") {
+        previous.nodes.push(...item.nodes);
+      } else {
+        merged.push(item.kind === "bucket"
+          ? { kind: "bucket", nodes: [...item.nodes] }
+          : item);
+      }
+    }
+    return merged.map((item) => {
+      if (item.kind !== "bucket") return item;
+      const first = item.nodes[0]?.nodeId ?? "none";
+      const last = item.nodes[item.nodes.length - 1]?.nodeId ?? first;
+      return {
+        ...item,
+        count: item.nodes.length,
+        bucketKey: `${scopeKey}:${first}:${last}`,
+      };
+    });
+  }
+
+  function materializeBuckets(items) {
+    return items.flatMap((item) => {
+      if (item.kind !== "bucket") return [item];
+      if (!state.expandedBuckets.has(item.bucketKey)) {
+        return [{ ...item, expanded: false }];
+      }
+      return [
+        { ...item, expanded: true },
+        ...item.nodes.map((node) => ({ kind: "node", node })),
+      ];
+    });
+  }
+
+  function siblingItems(nodes, path, scopeKey) {
+    const items = nodes.map((node) => {
+      const summary = typeof node.summary === "string" ? node.summary.trim() : "";
+      const complete = node.status === "closed" || node.status === "compacted";
+      return complete && !summary && !path.has(node.nodeId)
+        ? { kind: "bucket", nodes: [node] }
+        : { kind: "node", node };
+    });
+    const activeIndex = nodes.findIndex((node) => path.has(node.nodeId));
+    const visibleEnd = activeIndex < 0 ? nodes.length : activeIndex + 1;
+    if (visibleEnd < nodes.length || nodes.length <= MAX_VISIBLE_SIBLINGS) {
+      return materializeBuckets(mergeBuckets(items, scopeKey));
+    }
+    const visibleStart = Math.max(0, visibleEnd - MAX_VISIBLE_SIBLINGS);
+    if (visibleStart === 0) {
+      return materializeBuckets(mergeBuckets(items, scopeKey));
+    }
+    const hiddenNodes = items.slice(0, visibleStart).flatMap((item) =>
+      item.kind === "bucket" ? item.nodes : [item.node]);
+    return materializeBuckets(mergeBuckets([
+      { kind: "bucket", nodes: hiddenNodes },
+      ...items.slice(visibleStart, visibleEnd),
+    ], scopeKey));
+  }
+
+  function projectSnapshot(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.nodes)) return [];
+    const byId = new Map(snapshot.nodes.map((node) => [node.nodeId, node]));
+    const children = new Map();
+    for (const node of snapshot.nodes) {
+      const key = node.parentId ?? "";
+      const siblings = children.get(key) ?? [];
+      siblings.push(node);
+      children.set(key, siblings);
+    }
+    for (const siblings of children.values()) {
+      siblings.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+    }
+    const path = activePath(snapshot, byId);
+    const rows = [];
+
+    function visibleTaskNodes(nodes) {
+      const visible = [];
+      for (const node of nodes) {
+        const descendants = children.get(node.nodeId) ?? [];
+        const active = node.nodeId === snapshot.activeNodeId;
+        const summary = typeof node.summary === "string" ? node.summary.trim() : "";
+        const complete = node.status === "closed" || node.status === "compacted";
+        const elide =
+          node.kind !== "root_epoch" &&
+          descendants.length > 0 && !active && !summary && !complete;
+        if (elide) visible.push(...visibleTaskNodes(descendants));
+        else visible.push(node);
+      }
+      return visible;
+    }
+
+    function walk(nodes, ancestors, parentId) {
+      const scopeKey = `${snapshot.threadId}:${parentId ?? "root"}`;
+      const items = siblingItems(visibleTaskNodes(nodes), path, scopeKey);
+      items.forEach((item, index) => {
+        if (rows.length >= MAX_ROWS) return;
+        const last = index === items.length - 1;
+        if (item.kind === "bucket") {
+          rows.push({
+            key: `bucket:${item.bucketKey}`,
+            kind: "bucket",
+            bucketKey: item.bucketKey,
+            expanded: item.expanded,
+            count: item.count,
+            icon: "history",
+            tone: "muted",
+            depth: ancestors.length,
+            last,
+            label: tp(
+              item.expanded ? "branches.hide" : "branches.hidden",
+              item.count,
+            ),
+          });
+          return;
+        }
+        const node = item.node;
+        const descendants = children.get(node.nodeId) ?? [];
+        const active = node.nodeId === snapshot.activeNodeId;
+        const subtreeKey = `${snapshot.threadId}:${node.nodeId}`;
+        const [icon, tone] = nodeVisual(node, active, descendants.length > 0);
+        const complete = node.status === "closed" || node.status === "compacted";
+        const subtreeCollapsed =
+          descendants.length > 0 &&
+          complete &&
+          !path.has(node.nodeId) &&
+          !state.expandedSubtrees.has(subtreeKey);
+        rows.push({
+          key: `node:${node.nodeId}`,
+          kind: "node",
+          nodeId: node.nodeId,
+          node,
+          childCount: descendants.length,
+          subtreeKey,
+          subtreeCollapsed,
+          icon,
+          tone,
+          depth: ancestors.length,
+          last,
+          label: nodeLabel(node, active),
+          active,
+        });
+        if (active) appendSpawnRows(rows, snapshot.threadId, [...ancestors, last]);
+        if (!subtreeCollapsed) {
+          walk(descendants, [...ancestors, last], node.nodeId);
+        }
+      });
+    }
+
+    function taskCountBelow(nodeId) {
+      let count = 0;
+      const pending = [...(children.get(nodeId) ?? [])];
+      while (pending.length) {
+        const node = pending.pop();
+        if (!node) continue;
+        if (node.kind !== "root_epoch") count += 1;
+        pending.push(...(children.get(node.nodeId) ?? []));
+      }
+      return count;
+    }
+
+    const roots = children.get("") ?? [];
+    const epochs = roots.filter((node) => node.kind === "root_epoch");
+    const looseTasks = roots.filter((node) => node.kind !== "root_epoch");
+    const currentEpoch =
+      epochs.find((epoch) => path.has(epoch.nodeId)) ??
+      epochs.at(-1) ??
+      null;
+    const historicalEpochs = epochs.filter((epoch) => epoch !== currentEpoch);
+    if (historicalEpochs.length && rows.length < MAX_ROWS) {
+      const epochKey = `${snapshot.threadId}:context-history`;
+      const expanded = state.expandedEpochs.has(epochKey);
+      const compactionCount =
+        historicalEpochs.filter((epoch) => epoch.status === "compacted").length ||
+        historicalEpochs.length;
+      rows.push({
+        key: "context-history",
+        kind: "context-history",
+        epochKey,
+        expanded,
+        icon: "history",
+        tone: "muted",
+        depth: 0,
+        last: currentEpoch == null && looseTasks.length === 0,
+        label: t("context.earlier"),
+        meta: tp("context.compactions", compactionCount),
+        compactionCount,
+      });
+      if (expanded) {
+        historicalEpochs.forEach((epoch, index) => {
+          if (rows.length >= MAX_ROWS) return;
+          const contextEpochKey =
+            `${snapshot.threadId}:context-epoch:${epoch.nodeId}`;
+          const contextEpochExpanded = state.expandedEpochs.has(contextEpochKey);
+          const contextEpochLast = index === historicalEpochs.length - 1;
+          const taskCount = taskCountBelow(epoch.nodeId);
+          const compactionNumber = Math.max(1, roots.indexOf(epoch) + 1);
+          rows.push({
+            key: `context-epoch:${epoch.nodeId}`,
+            kind: "context-epoch",
+            epochKey: contextEpochKey,
+            epochNodeId: epoch.nodeId,
+            expanded: contextEpochExpanded,
+            icon: "compact",
+            tone: "muted",
+            depth: 1,
+            last: contextEpochLast,
+            label: t("context.beforeCompaction", {
+              count: formatInteger(compactionNumber),
+            }),
+            meta: tp("context.nodes", taskCount),
+            compactionNumber,
+            taskCount,
+          });
+          if (!contextEpochExpanded || rows.length >= MAX_ROWS) return;
+          const epochChildren = children.get(epoch.nodeId) ?? [];
+          walk(epochChildren, [false, contextEpochLast], epoch.nodeId);
+          if (snapshot.activeNodeId === epoch.nodeId) {
+            appendSpawnRows(rows, snapshot.threadId, [false, contextEpochLast]);
+          }
+        });
+      }
+    }
+    if (currentEpoch && rows.length < MAX_ROWS) {
+      const epochChildren = children.get(currentEpoch.nodeId) ?? [];
+      walk(epochChildren, [], currentEpoch.nodeId);
+      if (snapshot.activeNodeId === currentEpoch.nodeId) {
+        appendSpawnRows(rows, snapshot.threadId, []);
+      }
+    }
+    if (looseTasks.length && rows.length < MAX_ROWS) {
+      walk(looseTasks, [], null);
+    }
+    if (rows.length === MAX_ROWS) {
+      rows.push({
+        key: "limit",
+        kind: "limit",
+        icon: "more",
+        tone: "muted",
+        depth: 0,
+        last: true,
+        label: t("context.additionalHidden"),
+      });
+    }
+    return rows;
+  }
+
+  function appendSpawnRows(rows, threadId, ancestors) {
+    for (const progress of state.spawns.get(normalizeThreadId(threadId))?.values() ?? []) {
+      progress.tasks.forEach((task, index) => {
+        if (rows.length >= MAX_ROWS) return;
+        const visual = spawnVisual(task.status);
+        rows.push({
+          key: `spawn:${progress.callId}:${task.ordinal}`,
+          kind: "spawn",
+          spawnTask: {
+            callId: progress.callId,
+            ordinal: task.ordinal,
+            threadId: task.threadId ?? null,
+            agentPath: task.agentPath ?? null,
+            status: task.status,
+            summary: task.summary ?? null,
+            observedAtMs: task.observedAtMs ?? null,
+            startedAtMs: task.startedAtMs ?? null,
+            completedAtMs: task.completedAtMs ?? null,
+          },
+          icon: visual.icon,
+          tone: visual.tone,
+          depth: ancestors.length,
+          last: index === progress.tasks.length - 1,
+          label: task.summary || t("spawn.parallelTask", {
+            count: formatInteger(Number(task.ordinal) + 1),
+          }),
+          meta: spawnStatusLabel(task.status),
+        });
+      });
+    }
+  }
+
+  function resolveWorkspaceDetailItem(snapshot, rowKey, projected = null) {
+    if (!snapshot || !Array.isArray(snapshot.nodes) || typeof rowKey !== "string") {
+      return null;
+    }
+    const visible = (projected ?? projectSnapshot(snapshot))
+      .find((item) =>
+        item.key === rowKey && (item.kind === "node" || item.kind === "spawn"));
+    if (visible) return visible;
+
+    if (rowKey.startsWith("node:")) {
+      const nodeId = rowKey.slice("node:".length);
+      const node = snapshot.nodes.find((candidate) => candidate.nodeId === nodeId);
+      if (!node || node.kind === "root_epoch") return null;
+      const descendants = snapshot.nodes.filter((candidate) =>
+        candidate.parentId === node.nodeId);
+      const byId = new Map(snapshot.nodes.map((candidate) =>
+        [candidate.nodeId, candidate]));
+      const path = activePath(snapshot, byId);
+      const active = node.nodeId === snapshot.activeNodeId;
+      const subtreeKey = `${snapshot.threadId}:${node.nodeId}`;
+      const complete = node.status === "closed" || node.status === "compacted";
+      const [icon, tone] = nodeVisual(node, active, descendants.length > 0);
+      return {
+        key: rowKey,
+        kind: "node",
+        nodeId: node.nodeId,
+        node,
+        childCount: descendants.length,
+        subtreeKey,
+        subtreeCollapsed:
+          descendants.length > 0 &&
+          complete &&
+          !path.has(node.nodeId) &&
+          !state.expandedSubtrees.has(subtreeKey),
+        icon,
+        tone,
+        label: nodeLabel(node, active),
+        active,
+        hiddenFromTree: true,
+      };
+    }
+
+    if (rowKey.startsWith("spawn:")) {
+      for (const progress of state.spawns
+        .get(normalizeThreadId(snapshot.threadId))?.values() ?? []) {
+        for (const task of progress.tasks) {
+          if (`spawn:${progress.callId}:${task.ordinal}` !== rowKey) continue;
+          const visual = spawnVisual(task.status);
+          return {
+            key: rowKey,
+            kind: "spawn",
+            spawnTask: {
+              callId: progress.callId,
+              ordinal: task.ordinal,
+              threadId: task.threadId ?? null,
+              agentPath: task.agentPath ?? null,
+              status: task.status,
+              summary: task.summary ?? null,
+              observedAtMs: task.observedAtMs ?? null,
+              startedAtMs: task.startedAtMs ?? null,
+              completedAtMs: task.completedAtMs ?? null,
+            },
+            icon: visual.icon,
+            tone: visual.tone,
+            label: task.summary || t("spawn.parallelTask", {
+              count: formatInteger(Number(task.ordinal) + 1),
+            }),
+            meta: spawnStatusLabel(task.status),
+            hiddenFromTree: true,
+          };
+        }
+      }
+    }
+    return null;
+  }
+
+  function nodeDetailModel(snapshot, nodeId) {
+    if (!snapshot || !Array.isArray(snapshot.nodes)) return null;
+    const byId = new Map(snapshot.nodes.map((node) => [node.nodeId, node]));
+    const node = byId.get(nodeId);
+    if (!node) return null;
+    const path = [];
+    const seen = new Set();
+    let current = node;
+    while (current && !seen.has(current.nodeId)) {
+      seen.add(current.nodeId);
+      path.push(current.nodeId);
+      current = current.parentId ? byId.get(current.parentId) : null;
+    }
+    path.reverse();
+    return {
+      nodeId: node.nodeId,
+      parentId: node.parentId ?? null,
+      kind: node.kind,
+      status: node.status,
+      summary: typeof node.summary === "string" ? node.summary.trim() : "",
+      memorySummary:
+        typeof node.memorySummary === "string" ? node.memorySummary.trim() : "",
+      memorySummaryTruncated: node.memorySummaryTruncated === true,
+      spawnOutcome: node.spawnOutcome ?? null,
+      spawnLink: normalizeSpawnLink(node.spawnLink),
+      start: node.start ?? null,
+      end: node.end ?? null,
+      contextPressure: node.contextPressure ?? null,
+      childCount: snapshot.nodes.filter((candidate) =>
+        candidate.parentId === node.nodeId).length,
+      path,
+      active: snapshot.activeNodeId === node.nodeId,
+    };
+  }
+
+  function nodeStatusLabel(detail) {
+    if (detail.active || detail.status === "live") return t("status.running");
+    if (detail.spawnOutcome === "errored") return t("status.failed");
+    if (detail.spawnOutcome === "aborted") return t("status.aborted");
+    if (detail.status === "closed") return t("status.completed");
+    if (detail.status === "compacted") return t("status.compacted");
+    return t("status.opened");
+  }
+
+  function contextLocationLabel(snapshot, detail) {
+    if (!snapshot || !detail?.path?.length) {
+      return t("context.current");
+    }
+    const roots = snapshot.nodes
+      .filter((node) => node.kind === "root_epoch" && node.parentId == null)
+      .sort((left, right) => (left.start ?? 0) - (right.start ?? 0));
+    if (!roots.length) return t("context.current");
+    const byId = new Map(snapshot.nodes.map((node) => [node.nodeId, node]));
+    let activeRoot = byId.get(snapshot.activeNodeId);
+    const seen = new Set();
+    while (activeRoot?.parentId && !seen.has(activeRoot.nodeId)) {
+      seen.add(activeRoot.nodeId);
+      activeRoot = byId.get(activeRoot.parentId);
+    }
+    if (activeRoot?.kind !== "root_epoch") activeRoot = roots.at(-1);
+    const rootId = detail.path[0];
+    if (rootId === activeRoot?.nodeId) {
+      return t("context.current");
+    }
+    const index = roots.findIndex((root) => root.nodeId === rootId);
+    const activeIndex = roots.findIndex((root) => root.nodeId === activeRoot?.nodeId);
+    if (index >= 0 && (activeIndex < 0 || index < activeIndex)) {
+      return t("context.beforeCompaction", {
+        count: formatInteger(index + 1),
+      });
+    }
+    return t("context.earlier");
+  }
+
+  function spawnStatusLabel(status) {
+    const normalized = normalizeSpawnStatus(status);
+    const keys = {
+      pendingInit: "spawnStatus.starting",
+      running: "spawnStatus.working",
+      completed: "spawnStatus.completed",
+      shutdown: "spawnStatus.finished",
+      errored: "spawnStatus.failed",
+      interrupted: "spawnStatus.interrupted",
+      notFound: "spawnStatus.notFound",
+    };
+    return t(keys[normalized] ?? "spawnStatus.unknown");
+  }
+
+  function spawnVisual(status) {
+    switch (normalizeSpawnStatus(status)) {
+      case "running":
+        return { icon: "running", tone: "live" };
+      case "completed":
+      case "shutdown":
+        return { icon: "check", tone: "done" };
+      case "interrupted":
+        return { icon: "warning", tone: "warning" };
+      case "errored":
+      case "notFound":
+        return { icon: "error", tone: "error" };
+      default:
+        return { icon: "idle", tone: "muted" };
+    }
+  }
+
+  function formatDuration(milliseconds) {
+    const value = Number(milliseconds);
+    if (!Number.isFinite(value) || value < 0) return null;
+    const seconds = Math.max(0, Math.round(value / 1_000));
+    const unit = (amount, name) => {
+      try {
+        return new Intl.NumberFormat(state.locale, {
+          style: "unit",
+          unit: name,
+          unitDisplay: "narrow",
+          maximumFractionDigits: 0,
+        }).format(amount);
+      } catch {
+        return `${formatInteger(amount)} ${name}`;
+      }
+    };
+    if (seconds < 60) return unit(seconds, "second");
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    if (minutes < 60) {
+      return [unit(minutes, "minute"), remainder ? unit(remainder, "second") : ""]
+        .filter(Boolean)
+        .join(" ");
+    }
+    const hours = Math.floor(minutes / 60);
+    const minuteRemainder = minutes % 60;
+    return [unit(hours, "hour"), minuteRemainder ? unit(minuteRemainder, "minute") : ""]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function spawnTimingText(task, now = Date.now()) {
+    if (!task) return null;
+    const observedAtMs = normalizeTimestamp(task.observedAtMs);
+    const startedAtMs = normalizeTimestamp(task.startedAtMs);
+    const completedAtMs = normalizeTimestamp(task.completedAtMs);
+    const phase = spawnPhase(task.status);
+    if (phase === "waiting") {
+      if (!observedAtMs) return null;
+      const waiting = formatDuration(Math.max(0, now - observedAtMs));
+      return waiting ? t("timing.waiting", { duration: waiting }) : null;
+    }
+    const start = startedAtMs;
+    const end = completedAtMs ?? now;
+    if (!start || end < start) return null;
+    const duration = formatDuration(end - start);
+    if (!duration) return null;
+    if (phase === "working") {
+      return t("timing.running", { duration });
+    }
+    return t("timing.ran", { duration });
+  }
+
+  function formatClockTime(value) {
+    const timestamp = normalizeTimestamp(value);
+    if (!timestamp) return null;
+    try {
+      return new Intl.DateTimeFormat(state.locale, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      }).format(new Date(timestamp));
+    } catch {
+      return new Date(timestamp).toLocaleTimeString();
+    }
+  }
+
+  function spawnTimingDetail(task, now = Date.now()) {
+    const duration = spawnTimingText(task, now);
+    const started = formatClockTime(task?.startedAtMs);
+    if (!duration || !started) return duration;
+    const phase = spawnPhase(task?.status);
+    const completed = formatClockTime(task?.completedAtMs);
+    const end = phase === "working"
+      ? t("timing.now")
+      : completed;
+    return end ? `${started} → ${end} · ${duration}` : duration;
+  }
+
+  function formatTokenCount(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return null;
+    try {
+      return new Intl.NumberFormat(state.locale, {
+        notation: "compact",
+        maximumFractionDigits: 1,
+      }).format(numeric);
+    } catch {
+      return String(Math.round(numeric));
+    }
+  }
+
+  function contextPressureText(pressure) {
+    if (!pressure) return null;
+    const context = formatTokenCount(pressure.contextTokens);
+    const open = formatTokenCount(pressure.openInputTokens);
+    const current = formatTokenCount(pressure.currentInputTokens);
+    if (context) {
+      const range = open && current
+        ? ` (${open} → ${current})`
+        : "";
+      return t("pressure.added", { context, range });
+    }
+    const problems = {
+      missing_current_usage: t("pressure.missingCurrent"),
+      missing_open_context_baseline: t("pressure.missingBaseline"),
+      coordinate_mismatch: t("pressure.coordinateMismatch"),
+    };
+    return problems[pressure.problem] ??
+      t("pressure.unavailable");
+  }

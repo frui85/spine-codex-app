@@ -116,3 +116,28 @@ test("rejects non-loopback CDP endpoints", async () => {
     /unsafe CDP WebSocket URL/,
   );
 });
+
+test('owned Desktop survives CDP outage and replacement target without stopping supervision', async () => {
+  const abort = new AbortController();
+  const sockets = [];
+  class Socket extends EventTarget {
+    closed = false;
+    constructor(url) { super(); this.url=url; sockets.push(this); queueMicrotask(()=>this.dispatchEvent(new Event('open'))); }
+    send(payload) {const request=JSON.parse(payload);queueMicrotask(()=>{const event=new Event('message');Object.defineProperty(event,'data',{value:JSON.stringify({id:request.id,result:{}})});this.dispatchEvent(event);});}
+    close() {this.closed=true;this.dispatchEvent(new Event('close'));}
+  }
+  const { superviseRenderer } = await import('../lib/renderer-supervisor.mjs');
+  let calls=0;
+  await superviseRenderer({port:9222,rendererSource:'(()=>true)()',WebSocketImpl:Socket,signal:abort.signal,isDesktopRunning:()=>true,pollIntervalMs:0,shutdownGraceMs:0,
+    fetchImpl:async()=>{
+      calls++;
+      if(calls===2)throw Error('temporary disconnect');
+      if(calls===4)abort.abort();
+      const id=calls===1?'before':'after';
+      return {ok:true,json:async()=>[{id,type:'page',url:'app://-/index.html',webSocketDebuggerUrl:`ws://127.0.0.1:9222/devtools/page/${id}`}]};
+    },
+  });
+  assert.equal(sockets.length,2);
+  assert.equal(sockets.every(socket=>socket.closed),true);
+  assert.equal(calls,4);
+});

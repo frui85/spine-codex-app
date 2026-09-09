@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import vm from "node:vm";
 
@@ -6,6 +7,7 @@ const windowListeners = new Map();
 const documentListeners = new Map();
 const storage = new Map([["spine-codex.view.expanded", "false"]]);
 const idleCallbacks = new Map();
+const bridgeMessages = [];
 const canonicalThreadId = "00000000-0000-0000-0000-000000000001";
 const annotation = {
   getAttribute(name) {
@@ -28,6 +30,12 @@ const temporarySidebarItem = {
   classList: { contains: () => true },
 };
 globalThis.window = globalThis;
+globalThis.electronBridge = {
+  sendMessageFromView(message) {
+    bridgeMessages.push(message);
+    return Promise.resolve();
+  },
+};
 globalThis.location = { pathname: "/", hash: "" };
 globalThis.history = {
   pushState() {},
@@ -78,6 +86,9 @@ globalThis.document = {
 globalThis.Node = { ELEMENT_NODE: 1 };
 globalThis.addEventListener = (type, listener) => windowListeners.set(type, listener);
 globalThis.removeEventListener = (type) => windowListeners.delete(type);
+globalThis.postMessage = (data) => {
+  queueMicrotask(() => windowListeners.get("message")?.({ data }));
+};
 let nextFrame = 0;
 globalThis.requestAnimationFrame = () => ++nextFrame;
 globalThis.cancelAnimationFrame = () => {};
@@ -96,11 +107,11 @@ const source = fs.readFileSync(
 
 async function checkDelayedThreadMount() {
   const observers = [];
-  const windowListeners = new Map();
-  const documentListeners = new Map();
+  const delayedWindowListeners = new Map();
+  const delayedDocumentListeners = new Map();
   const delayedThreadId = "00000000-0000-0000-0000-000000000077";
   let mounted = false;
-  let nextFrame = 0;
+  let delayedFrame = 0;
 
   class TestMutationObserver {
     constructor(callback) {
@@ -136,23 +147,20 @@ async function checkDelayedThreadMount() {
     },
     classList: { contains: () => false },
   };
-  const annotation = {
+  const delayedAnnotation = {
     getAttribute: (name) =>
       name === "data-response-annotation-conversation" ? delayedThreadId : null,
   };
-  const mainThread = {
+  const delayedMainThread = {
     querySelector: (selector) =>
-      selector === "[data-response-annotation-conversation]" ? annotation : null,
+      selector === "[data-response-annotation-conversation]"
+        ? delayedAnnotation
+        : null,
   };
-  const documentElement = {
-    lang: "en",
-    clientWidth: 1200,
-    clientHeight: 800,
-    getAttribute: (name) => name === "lang" ? "en" : null,
-  };
-  const storage = new Map([["spine-codex.view.expanded", "false"]]);
+  const delayedStorage = new Map([["spine-codex.view.expanded", "false"]]);
   const sandbox = {
     console,
+    electronBridge: { sendMessageFromView: () => Promise.resolve() },
     MutationObserver: TestMutationObserver,
     Node: { ELEMENT_NODE: 1 },
     navigator: { language: "en" },
@@ -161,17 +169,24 @@ async function checkDelayedThreadMount() {
     innerWidth: 1200,
     innerHeight: 800,
     localStorage: {
-      getItem: (key) => storage.get(key) ?? null,
-      setItem: (key, value) => storage.set(key, String(value)),
-      removeItem: (key) => storage.delete(key),
+      getItem: (key) => delayedStorage.get(key) ?? null,
+      setItem: (key, value) => delayedStorage.set(key, String(value)),
+      removeItem: (key) => delayedStorage.delete(key),
     },
     document: {
       body,
-      documentElement,
+      documentElement: {
+        lang: "en",
+        clientWidth: 1200,
+        clientHeight: 800,
+        getAttribute: (name) => name === "lang" ? "en" : null,
+      },
       querySelector(selector) {
         if (!mounted) return null;
         if (selector === "[data-app-action-sidebar-thread-id]") return sidebarItem;
-        if (selector === '[data-pip-anchor-host="codex-main-thread"]') return mainThread;
+        if (selector === '[data-pip-anchor-host="codex-main-thread"]') {
+          return delayedMainThread;
+        }
         return null;
       },
       querySelectorAll(selector) {
@@ -179,12 +194,14 @@ async function checkDelayedThreadMount() {
           ? [sidebarItem]
           : [];
       },
-      addEventListener: (type, listener) => documentListeners.set(type, listener),
-      removeEventListener: (type) => documentListeners.delete(type),
+      addEventListener: (type, listener) => delayedDocumentListeners.set(type, listener),
+      removeEventListener: (type) => delayedDocumentListeners.delete(type),
     },
-    addEventListener: (type, listener) => windowListeners.set(type, listener),
-    removeEventListener: (type) => windowListeners.delete(type),
-    requestAnimationFrame: () => ++nextFrame,
+    addEventListener: (type, listener) => delayedWindowListeners.set(type, listener),
+    removeEventListener: (type) => delayedWindowListeners.delete(type),
+    postMessage: (data) => queueMicrotask(() =>
+      delayedWindowListeners.get("message")?.({ data })),
+    requestAnimationFrame: () => ++delayedFrame,
     cancelAnimationFrame() {},
     queueMicrotask,
     setTimeout,
@@ -213,7 +230,7 @@ async function checkDelayedThreadMount() {
   );
   assert.equal(
     observers.some((observer) =>
-      observer.observations.some(({ target }) => target === mainThread)),
+      observer.observations.some(({ target }) => target === delayedMainThread)),
     true,
   );
   assert.equal(startupObserver.disconnected, true);
@@ -225,6 +242,28 @@ async function checkDelayedThreadMount() {
 }
 
 await checkDelayedThreadMount();
+const contractRoot = new URL("./fixtures/spine-codex-0.3.3/", import.meta.url);
+const contractManifest = JSON.parse(fs.readFileSync(
+  new URL("manifest.json", contractRoot),
+  "utf8",
+));
+function readContract(name) {
+  const bytes = fs.readFileSync(new URL(name, contractRoot));
+  const generatedBytes = bytes.at(-1) === 0x0a
+    ? bytes.subarray(0, bytes.length - 1)
+    : bytes;
+  assert.equal(
+    createHash("sha256").update(generatedBytes).digest("hex"),
+    contractManifest.files[name].sha256,
+  );
+  return JSON.parse(bytes.toString("utf8"));
+}
+const treeContract = readContract("SpineTreeUpdatedNotification.json");
+const spawnContract = readContract("SpineSpawnProgressUpdatedNotification.json");
+assert.equal(contractManifest.spineCodexProductVersion, "0.3.3");
+assert.equal(contractManifest.codexCompatibilityVersion, "0.147.0");
+assert.equal(treeContract.title, "SpineTreeUpdatedNotification");
+assert.equal(spawnContract.title, "SpineSpawnProgressUpdatedNotification");
 assert.match(source, /data-pip-obstacle="thread-summary-panel"/);
 assert.doesNotMatch(source, /hasSummarySections/);
 assert.doesNotMatch(
@@ -239,8 +278,193 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "26.901.20858");
-assert.equal(api.revision, 11);
+assert.equal(api.version, "26.901.51231");
+assert.equal(api.revision, 12);
+
+const recoveredThreadId = "00000000-0000-0000-0000-000000000099";
+const resumeRequest = {
+  type: "mcp-request",
+  hostId: "local",
+  request: {
+    jsonrpc: "2.0",
+    id: "resume-recovery-1",
+    method: "thread/resume",
+    params: { threadId: canonicalThreadId, history: null },
+  },
+};
+// External adapter mode has no recovery IPC: preserve the original error.
+globalThis.__spineCodexRuntimeMode = "adapter";
+const externalResume = {...resumeRequest, request:{...resumeRequest.request, id:"external-no-hook"}};
+windowListeners.get("codex-message-from-view")({detail:externalResume});
+let externalErrorStopped = false;
+const externalBridgeCount = bridgeMessages.length;
+windowListeners.get("message")({data:{type:"mcp-response",message:{id:"external-no-hook",error:{message:"Fatal error: Spine durability is faulted: Spine replay failed: sampling commit does not match its sampling-started record"}}},stopImmediatePropagation(){externalErrorStopped=true;}});
+assert.equal(externalErrorStopped,false);
+assert.equal(bridgeMessages.length,externalBridgeCount);
+delete globalThis.__spineCodexRuntimeMode;
+windowListeners.get("codex-message-from-view")({ detail: resumeRequest });
+let fatalStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-recovery-1",
+      error: {
+        message: "Fatal error: Spine durability is faulted: Spine replay failed: sampling commit does not match its sampling-started record",
+      },
+    },
+  },
+  stopImmediatePropagation() { fatalStopped = true; },
+});
+assert.equal(fatalStopped, true);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-recover");
+assert.equal(bridgeMessages.at(-1).request.params.threadId, canonicalThreadId);
+
+const earlyStatusNotification = {
+  type: "mcp-notification",
+  method: "thread/status/changed",
+  params: { threadId: recoveredThreadId, status: { type: "idle" } },
+};
+windowListeners.get("message")({ data: earlyStatusNotification });
+assert.equal(earlyStatusNotification.params.threadId, canonicalThreadId);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-aliases-sync");
+assert.deepEqual(bridgeMessages.at(-1).aliases, [[canonicalThreadId, recoveredThreadId]]);
+
+const recoveryResponse = {
+  type: "mcp-response",
+  message: {
+    id: "resume-recovery-1",
+    result: { thread: { id: recoveredThreadId } },
+  },
+};
+windowListeners.get("message")({ data: recoveryResponse });
+assert.equal(recoveryResponse.message.result.thread.id, canonicalThreadId);
+assert.equal(
+  JSON.parse(storage.get("spine-codex.view.replay-aliases.v1")).entries[0].target,
+  recoveredThreadId,
+);
+
+const overflowThreadId = "00000000-0000-0000-0000-000000000002";
+const overflowRecoveredThreadId = "00000000-0000-0000-0000-000000000098";
+const overflowResumeRequest = {
+  type: "mcp-request",
+  hostId: "local",
+  request: {
+    jsonrpc: "2.0",
+    id: "resume-overflow-1",
+    method: "thread/resume",
+    params: { threadId: overflowThreadId, history: null },
+  },
+};
+windowListeners.get("codex-message-from-view")({ detail: overflowResumeRequest });
+let overflowStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-1",
+      error: {
+        message:
+          "Fatal error: Spine context plan failed: " +
+          "Spine memory fragment is 9005 bytes; maximum is 8000",
+      },
+    },
+  },
+  stopImmediatePropagation() { overflowStopped = true; },
+});
+assert.equal(overflowStopped, true);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-recover");
+assert.equal(bridgeMessages.at(-1).request.params.threadId, overflowThreadId);
+
+const overflowStatusNotification = {
+  type: "mcp-notification",
+  method: "thread/status/changed",
+  params: { threadId: overflowRecoveredThreadId, status: { type: "idle" } },
+};
+windowListeners.get("message")({ data: overflowStatusNotification });
+assert.equal(overflowStatusNotification.params.threadId, overflowThreadId);
+assert.deepEqual(bridgeMessages.at(-1).aliases, [
+  [canonicalThreadId, recoveredThreadId],
+  [overflowThreadId, overflowRecoveredThreadId],
+]);
+const overflowRecoveryResponse = {
+  type: "mcp-response",
+  message: {
+    id: "resume-overflow-1",
+    result: { thread: { id: overflowRecoveredThreadId } },
+  },
+};
+windowListeners.get("message")({ data: overflowRecoveryResponse });
+assert.equal(overflowRecoveryResponse.message.result.thread.id, overflowThreadId);
+
+const wrappedOverflowThreadId = "00000000-0000-0000-0000-000000000003";
+windowListeners.get("codex-message-from-view")({
+  detail: {
+    ...overflowResumeRequest,
+    request: {
+      ...overflowResumeRequest.request,
+      id: "resume-overflow-wrapped",
+      params: { threadId: wrappedOverflowThreadId, history: null },
+    },
+  },
+});
+let wrappedOverflowStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-wrapped",
+      error: {
+        message:
+          "Fatal error: Spine durability is faulted: Spine context plan failed: " +
+          "Spine memory fragment is 9005 bytes; maximum is 8000",
+      },
+    },
+  },
+  stopImmediatePropagation() { wrappedOverflowStopped = true; },
+});
+assert.equal(wrappedOverflowStopped, true);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-recover");
+assert.equal(bridgeMessages.at(-1).request.params.threadId, wrappedOverflowThreadId);
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-wrapped",
+      error: { message: "synthetic recovery failure" },
+    },
+  },
+});
+
+const boundaryThreadId = "00000000-0000-0000-0000-000000000004";
+windowListeners.get("codex-message-from-view")({
+  detail: {
+    ...overflowResumeRequest,
+    request: {
+      ...overflowResumeRequest.request,
+      id: "resume-overflow-boundary",
+      params: { threadId: boundaryThreadId, history: null },
+    },
+  },
+});
+const bridgeMessageCount = bridgeMessages.length;
+let boundaryStopped = false;
+windowListeners.get("message")({
+  data: {
+    type: "mcp-response",
+    message: {
+      id: "resume-overflow-boundary",
+      error: {
+        message:
+          "Fatal error: Spine context plan failed: " +
+          "Spine memory fragment is 8000 bytes; maximum is 8000",
+      },
+    },
+  },
+  stopImmediatePropagation() { boundaryStopped = true; },
+});
+assert.equal(boundaryStopped, false);
+assert.equal(bridgeMessages.length, bridgeMessageCount);
 assert.equal(api.resolveLocale("zh-CN"), "zh-Hans");
 assert.equal(api.resolveLocale("zh-TW"), "zh-Hant");
 assert.equal(api.resolveLocale("ja-JP"), "ja");
@@ -346,12 +570,13 @@ assert.doesNotMatch(source, /2106641128|__spineCodexStatsigGateOverride/);
 assert.doesNotMatch(source, /Restart ChatGPT|重启 ChatGPT/);
 assert.deepEqual(
   api.selectSettingsFeatures([
-    { name: "spine_spawn", stage: "beta", enabled: true },
+    { name: "spine_spawn", stage: "stable", enabled: true },
     { name: "spinetree_memory_projection", stage: "beta", enabled: false },
     { name: "spine_future_feature", stage: "beta", enabled: true },
     { name: "spine_jit", stage: "stable", enabled: true },
     { name: "spine_trim", stage: "stable", enabled: true },
     { name: "spine_future_stable", stage: "stable", enabled: true },
+    { name: "spine_removed_feature", stage: "removed", enabled: true },
     { name: "memories", stage: "beta", enabled: true },
     { name: "spine.invalid", stage: "beta", enabled: true },
   ]).map((feature) => [feature.name, feature.enabled]),
@@ -362,6 +587,69 @@ assert.deepEqual(
     ["spinetree_memory_projection", false],
     ["spine_future_feature", true],
   ],
+);
+assert.equal(
+  api.selectSettingsFeatures([
+    { name: "spine_spawn", stage: "stable", enabled: false },
+  ])[0]?.stage,
+  "stable",
+);
+globalThis.__spineCodexLocalIdentityV1 = Object.freeze({
+  mode: "dual",
+  productVersion: "0.3.3",
+  compatibilityVersion: "0.147.0",
+});
+assert.deepEqual(
+  api.settingsStatus("local", [
+    {
+      name: "spine_spawn",
+      stage: "stable",
+      enabled: true,
+      defaultEnabled: true,
+    },
+    {
+      name: "spinetree_memory_projection",
+      stage: "beta",
+      enabled: false,
+      defaultEnabled: false,
+    },
+  ]),
+  {
+    hostId: "local",
+    productVersion: "0.3.3",
+    compatibilityVersion: "0.147.0",
+    spawnDefaultEnabled: true,
+    spawnEnabled: true,
+    memoryProjectionEnabled: false,
+  },
+);
+assert.deepEqual(
+  api.settingsStatus("remote-ssh:build-host", [
+    {
+      name: "spine_spawn",
+      stage: "stable",
+      enabled: false,
+      defaultEnabled: false,
+    },
+    {
+      name: "spinetree_memory_projection",
+      stage: "beta",
+      enabled: true,
+      defaultEnabled: false,
+    },
+  ]),
+  {
+    hostId: "remote-ssh:build-host",
+    productVersion: null,
+    compatibilityVersion: null,
+    spawnDefaultEnabled: false,
+    spawnEnabled: false,
+    memoryProjectionEnabled: true,
+  },
+);
+assert.match(
+  source,
+  /state\.settingsFeatures = new Map\(\);[\s\S]{0,160}state\.settingsLoadedHostId = null/,
 );
 const snapshot = {
   threadId: canonicalThreadId,
@@ -401,10 +689,36 @@ const snapshot = {
     { nodeId: "1.3.1", parentId: "1.3", kind: "task", status: "live", summary: "Verify", start: 5 },
   ],
 };
+for (const field of treeContract.required) {
+  assert.equal(Object.hasOwn(snapshot, field), true, `tree fixture field ${field}`);
+}
+for (const node of snapshot.nodes) {
+  for (const field of treeContract.definitions.SpineTreeNode.required) {
+    assert.equal(Object.hasOwn(node, field), true, `tree node fixture field ${field}`);
+  }
+  assert.equal(treeContract.definitions.SpineTreeNodeKind.enum.includes(node.kind), true);
+  assert.equal(treeContract.definitions.SpineTreeNodeStatus.enum.includes(node.status), true);
+}
 assert.equal(
   api.ingest({ type: "mcp-notification", method: "turn/spineTree/updated", params: snapshot }),
   true,
 );
+const normalizedContractSnapshot = api.exportSnapshots()
+  .find((entry) => entry.threadId === canonicalThreadId);
+for (const field of Object.keys(treeContract.properties)) {
+  assert.equal(
+    Object.hasOwn(normalizedContractSnapshot, field),
+    true,
+    `normalized tree field ${field}`,
+  );
+}
+for (const field of Object.keys(treeContract.definitions.SpineTreeNode.properties)) {
+  assert.equal(
+    Object.hasOwn(normalizedContractSnapshot.nodes[0], field),
+    true,
+    `normalized tree node field ${field}`,
+  );
+}
 assert.equal(
   api.ingest({
     type: "mcp-notification",
@@ -479,26 +793,47 @@ assert.equal(
   }),
   true,
 );
+const spawnProgress = {
+  threadId: snapshot.threadId,
+  turnId: "turn",
+  callId: "call_demo-123",
+  tasks: [{
+    ordinal: 0,
+    summary: "Inspect the native subagent",
+    threadId: "00000000-0000-0000-0000-000000000099",
+    agentPath: "root/spawn_calldemo123_0",
+    status: "completed",
+  }],
+};
+for (const field of spawnContract.required) {
+  assert.equal(Object.hasOwn(spawnProgress, field), true, `spawn fixture field ${field}`);
+}
+for (const field of spawnContract.definitions.SpineSpawnTaskProgress.required) {
+  assert.equal(Object.hasOwn(spawnProgress.tasks[0], field), true, `spawn task field ${field}`);
+}
+assert.equal(
+  spawnContract.definitions.CollabAgentStatus.enum.includes(spawnProgress.tasks[0].status),
+  true,
+);
 assert.equal(
   api.ingest({
     type: "mcp-notification",
     method: "turn/spineSpawnProgress/updated",
     hostId: "local",
-    params: {
-      threadId: snapshot.threadId,
-      turnId: "turn",
-      callId: "call_demo-123",
-      tasks: [{
-        ordinal: 0,
-        summary: "Inspect the native subagent",
-        threadId: "00000000-0000-0000-0000-000000000099",
-        agentPath: "root/spawn_calldemo123_0",
-        status: "completed",
-      }],
-    },
+    params: spawnProgress,
   }),
   true,
 );
+const normalizedSpawnTask = api.projectSnapshot(api.exportSnapshots()
+  .find((entry) => entry.threadId === canonicalThreadId))
+  .find((row) => row.key === "spawn:call_demo-123:0")?.spawnTask;
+for (const field of Object.keys(spawnContract.definitions.SpineSpawnTaskProgress.properties)) {
+  assert.equal(
+    Object.hasOwn(normalizedSpawnTask, field),
+    true,
+    `normalized spawn task field ${field}`,
+  );
+}
 const settledSpawnSnapshot = {
   ...sameSequenceSnapshot,
   snapshotSeq: 3,
@@ -1073,6 +1408,14 @@ assert.deepEqual(api.getStats(), {
   subagentLabelSyncPending: false,
   subagentListObserved: false,
   subagentTitleHookPending: false,
+  replayRecoveryAliases: 2,
+  replayRecoveryPending: 0,
+  replayRecoveryInFlight: 0,
+  lastReplayRecovery: {
+    status: "failed",
+    threadId: wrappedOverflowThreadId,
+    message: "synthetic recovery failure",
+  },
 });
 assert.equal(windowListeners.has("message"), true);
 const messageListener = windowListeners.get("message");
@@ -1140,8 +1483,8 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "26.901.20858");
-assert.equal(restoredApi.revision, 11);
+assert.equal(restoredApi.version, "26.901.51231");
+assert.equal(restoredApi.revision, 12);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&
@@ -1171,6 +1514,9 @@ assert.equal(restoredApi.getStats().threads, 0);
 assert.equal(storage.has("spine-codex.view.snapshots.v1"), false);
 assert.equal(storage.has("spine-codex.view.spawn-intents.v1"), false);
 assert.equal(storage.has("spine-codex.view.thread-aliases"), false);
+assert.equal(storage.has("spine-codex.view.replay-aliases.v1"), false);
+assert.equal(bridgeMessages.at(-1).type, "spine-thread-replay-aliases-sync");
+assert.deepEqual(bridgeMessages.at(-1).aliases, []);
 restoredApi.destroy();
 
 console.log(

@@ -104,8 +104,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          notes="docs/RELEASE_NOTES_v${VERSION}.md"
-          test -f "$notes"
+          notes_source="docs/RELEASE_NOTES_v${VERSION}.md"
+          notes="$RUNNER_TEMP/release-notes-v${VERSION}.md"
+          test -f "$notes_source"
+          node scripts/prepare-release-notes.mjs \
+            "$notes_source" "$notes" "$GITHUB_REPOSITORY" "$TAG" "$VERSION"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --verify-tag --draft \
               --title "SpineCodex App $TAG" --notes-file "$notes"

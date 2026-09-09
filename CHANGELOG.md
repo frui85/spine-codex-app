@@ -4,6 +4,11 @@
 
 ## Unreleased
 
+- Proposal: native macOS mode/status menu; external adapter remains default, with explicit clone and automatic fallback options.
+- Verifies local adapter PATH precedence and initialize handshake; continues Renderer reconnection for the owned Desktop lifetime.
+- Records official 0.3.3 / CLI 0.147.0 and supplementary fork 0.4.1 / CLI 0.153.4 baselines.
+
+
 ## v26.901.20858 — 2026-09-05
 
 Exact-version macOS release for ChatGPT/Codex Desktop `26.901.20858`.

@@ -18,7 +18,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const metadata = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
 const VERSION = valueAfter("--version") ?? metadata.spineAppVersion ?? metadata.version;
 const SOURCE_VERSION = metadata.spineAppVersion ?? metadata.version;
-const MIN_SPINE_CODEX_VERSION = metadata.spineCodexVersion;
+const MIN_SPINE_CODEX_VERSION = metadata.minimumSpineCodexVersion;
 if (!/^\d+\.\d+\.\d+(?:\.\d+)?$/.test(VERSION)) {
   throw new Error(`invalid release version: ${VERSION}`);
 }
@@ -74,6 +74,7 @@ for (const name of [
   "spine-app.mjs",
   "spine-view.js",
   "spine-electron-main-hook.cjs",
+  "compatibility.json",
   "README.md",
   "THIRD_PARTY_NOTICES.md",
 ]) {
@@ -85,8 +86,8 @@ await copyFile(
   join(wrapper, "lib", "main-inspector.mjs"),
 );
 await copyFile(
-  join(ROOT, "lib", "renderer-supervisor.mjs"),
-  join(wrapper, "lib", "renderer-supervisor.mjs"),
+  join(ROOT, "lib", "main-hook-readiness.mjs"),
+  join(wrapper, "lib", "main-hook-readiness.mjs"),
 );
 await copyFile(
   join(ROOT, "lib", "app-server-output-filter.mjs"),
@@ -96,6 +97,21 @@ await copyFile(
   join(ROOT, "lib", "app-server-protocol-adapter.mjs"),
   join(wrapper, "lib", "app-server-protocol-adapter.mjs"),
 );
+await copyFile(
+  join(ROOT, "lib", "spine-codex-compatibility.mjs"),
+  join(wrapper, "lib", "spine-codex-compatibility.mjs"),
+);
+await copyFile(
+  join(ROOT, "lib", "desktop-bundle-contract.mjs"),
+  join(wrapper, "lib", "desktop-bundle-contract.mjs"),
+);
+await copyFile(
+  join(ROOT, "lib", "macos-inspector-clone.mjs"),
+  join(wrapper, "lib", "macos-inspector-clone.mjs"),
+);
+for (const name of ["runtime-mode.mjs", "mac-shell-environment.mjs", "renderer-supervisor.mjs", "status-bar.mjs", "adapter-handshake.mjs"]) {
+  await copyFile(join(ROOT,"lib",name), join(wrapper,"lib",name));
+}
 await copyFile(join(ROOT, "LICENSE"), join(releaseRoot, "LICENSE"));
 await copyFile(join(ROOT, "NOTICE"), join(releaseRoot, "NOTICE"));
 await writeFile(join(releaseRoot, "README-Windows.txt"), windowsReadme());
