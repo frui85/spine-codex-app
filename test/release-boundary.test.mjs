@@ -44,9 +44,9 @@ const inspectorClone = await readFile(
   "utf8",
 );
 
-test("wrapper 0.3.3.5 separates minimum, recommended, and compatibility identities", () => {
+test("wrapper 0.3.3.6 separates minimum, recommended, and compatibility identities", () => {
   assert.equal(metadata.version, "0.3.3");
-  assert.equal(metadata.spineAppVersion, "0.3.3.5");
+  assert.equal(metadata.spineAppVersion, "0.3.3.6");
   assert.equal(metadata.minimumSpineCodexVersion, "0.2.2");
   assert.equal(metadata.recommendedSpineCodexVersion, "0.3.3");
   assert.equal(metadata.validatedCodexCompatibilityVersion, "0.147.0");
@@ -57,11 +57,11 @@ test("wrapper 0.3.3.5 separates minimum, recommended, and compatibility identiti
     "26.901.20858",
     "26.901.51231",
   ]);
-  assert.match(launcher, /APP_VERSION = "0\.3\.3\.5"/);
+  assert.match(launcher, /APP_VERSION = "0\.3\.3\.6"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
   assert.match(launcher, /RECOMMENDED_SPINE_CODEX_VERSION = "0\.3\.3"/);
   assert.match(launcher, /VALIDATED_CODEX_COMPATIBILITY_VERSION = "0\.147\.0"/);
-  assert.match(renderer, /VERSION = "0\.3\.3\.5"/);
+  assert.match(renderer, /VERSION = "0\.3\.3\.6"/);
   assert.equal(compatibility.spineCodexAppVersion, metadata.spineAppVersion);
   assert.deepEqual(compatibility.local, {
     minimumSpineCodexVersion: metadata.minimumSpineCodexVersion,

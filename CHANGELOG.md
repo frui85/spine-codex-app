@@ -4,6 +4,21 @@
 
 ## Unreleased
 
+## v0.3.3.6 — 2026-09-09
+
+Fixes startup when the private inspectable Desktop clone changes independently
+of the installed application and the launcher incorrectly reports it as reused.
+
+- Records the finished clone's Desktop identity and SHA-256 of `app.asar` after
+  signing, then verifies both before reuse.
+- Rebuilds changed clones and legacy caches without a clone identity from the
+  installed compatible Desktop, preventing the missing local CLI marker error.
+- Consolidates local and fork maintenance branches into `main`, retaining the
+  current compatibility, replay recovery, and catalog transition handling, and
+  includes the SpineCodex / VS Code integration wiki.
+- Validated on Desktop `26.901.51231`: rebuilt successfully, reported
+  `Spine Tree ready`, and reused the verified clone on the next preparation.
+
 ## v0.3.3.5 — 2026-09-06
 
 App-only startup fix for Codex Desktop `26.901.51231`, which ships with the

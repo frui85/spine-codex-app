@@ -2,7 +2,7 @@
 
 > **简体中文** · [English](FEATURES.md)
 
-本文记录 SpineCodex App v0.3.3.5 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v0.3.3.6 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
 本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
 
