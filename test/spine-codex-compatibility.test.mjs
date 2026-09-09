@@ -105,3 +105,10 @@ lines.on("line", (line) => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+ test("platform release package suffixes preserve the product version, prereleases do not", async () => {
+  const {normalizeProductVersion} = await import("../lib/spine-codex-compatibility.mjs");
+  assert.equal(normalizeProductVersion("0.3.3-darwin-arm64"),"0.3.3");
+  assert.equal(normalizeProductVersion("0.4.1"),"0.4.1");
+  assert.equal(normalizeProductVersion("0.4.2-beta.1"),null);
+});

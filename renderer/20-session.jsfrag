@@ -142,6 +142,7 @@
   }
 
   function syncReplayAliases() {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
     const bridge = window.electronBridge;
     if (typeof bridge?.sendMessageFromView !== "function") return false;
     Promise.resolve(bridge.sendMessageFromView({
@@ -203,6 +204,7 @@
   }
 
   function rememberOutgoingResume(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return;
     const message = event?.detail;
     const request = message?.request;
     const requestId = request?.id == null ? null : String(request.id);
@@ -299,6 +301,7 @@
   }
 
   function handleReplayRecoveryMessage(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
     const data = event?.data;
     adoptReplayAliasFromStatusNotification(data);
     const response = replayResponse(data);

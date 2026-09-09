@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createAdapterHandshake } from "../lib/adapter-handshake.mjs";
 import { spawn } from "node:child_process";
 import { createAppServerOutputFilter } from "../lib/app-server-output-filter.mjs";
 import { createAppServerProtocolAdapter } from "../lib/app-server-protocol-adapter.mjs";
@@ -26,6 +27,9 @@ const child = spawn(binary, commandArguments, {
 
 let outputDrained = Promise.resolve();
 if (filtersAppServerOutput) {
+  const handshake = createAdapterHandshake(
+    process.env.SPINE_CODEX_ADAPTER_STATUS,
+  );
   const serverWriter = createBufferedLineWriter(child.stdin);
   let reportedSuppression = false;
   const reportedFallbacks = new Set();
@@ -58,8 +62,22 @@ if (filtersAppServerOutput) {
     child.stdin.once("error", reject);
   });
   filter.pipe(process.stdout, { end: false });
-  consumeLines(process.stdin, adapter.acceptClientLine, adapter.endClientInput);
-  consumeLines(child.stdout, adapter.acceptServerLine, () => clientWriter.end());
+  consumeLines(
+    process.stdin,
+    (line) => {
+      handshake.client(line);
+      adapter.acceptClientLine(line);
+    },
+    adapter.endClientInput,
+  );
+  consumeLines(
+    child.stdout,
+    (line) => {
+      handshake.server(line);
+      adapter.acceptServerLine(line);
+    },
+    () => clientWriter.end(),
+  );
 }
 
 child.once("error", (error) => {

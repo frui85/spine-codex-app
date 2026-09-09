@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+## v26.901.51231 — 2026-09-09
+
+- Aligns App release numbering with the supported Codex Desktop version.
+- Documents official CLI 0.3.3 / Codex 0.147.0 and xiurui-pan fork 0.4.1 / Codex 0.153.4; official updates remain a regression priority.
+- Adds a native macOS menu bar, adaptation details, persistent mode selection, graceful restart, and rollback after failed switches.
+- Preserves clone mode and adopts upstream external CLI adapter / Renderer supervision as a selectable fallback, with PATH and initialize verification.
+- Reduces target polling to one second and keeps reconnection active for the owned Desktop lifetime.
+
 ## v0.3.3.6 — 2026-09-09
 
 Fixes startup when the private inspectable Desktop clone changes independently

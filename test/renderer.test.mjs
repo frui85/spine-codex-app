@@ -278,7 +278,7 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "0.3.3.6");
+assert.equal(api.version, "26.901.51231");
 assert.equal(api.revision, 12);
 
 const recoveredThreadId = "00000000-0000-0000-0000-000000000099";
@@ -292,6 +292,16 @@ const resumeRequest = {
     params: { threadId: canonicalThreadId, history: null },
   },
 };
+// External adapter mode has no recovery IPC: preserve the original error.
+globalThis.__spineCodexRuntimeMode = "adapter";
+const externalResume = {...resumeRequest, request:{...resumeRequest.request, id:"external-no-hook"}};
+windowListeners.get("codex-message-from-view")({detail:externalResume});
+let externalErrorStopped = false;
+const externalBridgeCount = bridgeMessages.length;
+windowListeners.get("message")({data:{type:"mcp-response",message:{id:"external-no-hook",error:{message:"Fatal error: Spine durability is faulted: Spine replay failed: sampling commit does not match its sampling-started record"}}},stopImmediatePropagation(){externalErrorStopped=true;}});
+assert.equal(externalErrorStopped,false);
+assert.equal(bridgeMessages.length,externalBridgeCount);
+delete globalThis.__spineCodexRuntimeMode;
 windowListeners.get("codex-message-from-view")({ detail: resumeRequest });
 let fatalStopped = false;
 windowListeners.get("message")({
@@ -1473,7 +1483,7 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "0.3.3.6");
+assert.equal(restoredApi.version, "26.901.51231");
 assert.equal(restoredApi.revision, 12);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(

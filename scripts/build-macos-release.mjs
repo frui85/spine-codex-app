@@ -132,6 +132,10 @@ async function build(architecture) {
     join(ROOT, "lib", "macos-inspector-clone.mjs"),
     join(wrapper, "lib", "macos-inspector-clone.mjs"),
   );
+  for (const name of ["runtime-mode.mjs", "mac-shell-environment.mjs", "renderer-supervisor.mjs", "status-bar.mjs", "adapter-handshake.mjs"]) {
+    await copyFile(join(ROOT,"lib",name), join(wrapper,"lib",name));
+  }
+  await run(process.execPath, [join(ROOT,"scripts","build-status-bar.mjs"), "--arch", architecture, "--output", join(wrapper,"bin","SpineCodex Status.app")]);
   await chmod(join(wrapper, "bin", "spine-codex"), 0o755);
 
   await writeFile(join(macos, BUNDLE_NAME), appLauncher(), { mode: 0o755 });

@@ -44,9 +44,9 @@ const inspectorClone = await readFile(
   "utf8",
 );
 
-test("wrapper 0.3.3.6 separates minimum, recommended, and compatibility identities", () => {
-  assert.equal(metadata.version, "0.3.3");
-  assert.equal(metadata.spineAppVersion, "0.3.3.6");
+test("wrapper 26.901.51231 separates minimum, recommended, and compatibility identities", () => {
+  assert.equal(metadata.version, "26.901.51231");
+  assert.equal(metadata.spineAppVersion, "26.901.51231");
   assert.equal(metadata.minimumSpineCodexVersion, "0.2.2");
   assert.equal(metadata.recommendedSpineCodexVersion, "0.3.3");
   assert.equal(metadata.validatedCodexCompatibilityVersion, "0.147.0");
@@ -57,11 +57,11 @@ test("wrapper 0.3.3.6 separates minimum, recommended, and compatibility identiti
     "26.901.20858",
     "26.901.51231",
   ]);
-  assert.match(launcher, /APP_VERSION = "0\.3\.3\.6"/);
+  assert.match(launcher, /APP_VERSION = "26\.901\.51231"/);
   assert.match(launcher, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
   assert.match(launcher, /RECOMMENDED_SPINE_CODEX_VERSION = "0\.3\.3"/);
   assert.match(launcher, /VALIDATED_CODEX_COMPATIBILITY_VERSION = "0\.147\.0"/);
-  assert.match(renderer, /VERSION = "0\.3\.3\.6"/);
+  assert.match(renderer, /VERSION = "26\.901\.51231"/);
   assert.equal(compatibility.spineCodexAppVersion, metadata.spineAppVersion);
   assert.deepEqual(compatibility.local, {
     minimumSpineCodexVersion: metadata.minimumSpineCodexVersion,
@@ -187,18 +187,18 @@ test("Windows portable build contains native launchers but no upstream binary", 
 test("no-argument launch does not create a root workspace task", () => {
   assert.match(launcher, /workspace: null/);
   assert.match(launcher, /args\.workspace == null\s*\? null/);
-  assert.match(launcher, /if \(deepLink\) openArguments\.push\(deepLink\)/);
+  assert.match(launcher, /\.\.\.\(deepLink \? \[deepLink\] : \[\]\)/);
 });
 
 test("renderer injection survives Electron renderer replacement", () => {
   assert.match(launcher, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
   assert.match(
     launcher,
-    /`SPINE_CODEX_LOCAL_CLI_PATH=\$\{appEnvironment\.SPINE_CODEX_LOCAL_CLI_PATH\}`/,
+    /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/,
   );
   assert.match(
     launcher,
-    /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
+    /SPINE_CODEX_SHIM_NODE: process\.execPath/,
   );
   assert.match(mainHook, /SPINE_CODEX_LOCAL_CLI_PATH/);
   assert.match(mainHook, /patchLocalCliSelectorSource/);
@@ -231,7 +231,7 @@ test("local dependency paths are discovered without translated UI labels", () =>
   assert.match(launcher, /Inspector fuse marker \$\{nodeCliInspectFuse\}; runtime injection required/);
   assert.match(launcher, /!\["off", "removed"\]\.includes\(nodeCliInspectFuse\)/);
   assert.match(launcher, /Electron main-process Inspector fuse is \$\{nodeCliInspectFuse\}/);
-  assert.match(launcher, /The launched Desktop process was left running/);
+  assert.match(launcher, /request a graceful stop before any fallback/);
   assert.match(launcher, /NODE_CLI_INSPECT_FUSE_INDEX = 3/);
   assert.match(launcher, /Codex was not allowed to/);
   assert.match(launcher, /timeoutMs: 20_000/);

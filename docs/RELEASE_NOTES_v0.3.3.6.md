@@ -1,6 +1,8 @@
 # SpineCodex App v0.3.3.6
 
 [中文发布说明](RELEASE_NOTES_v0.3.3.6_ZH.md)
+Compatibility clarification (2026-09-09): official SpineCodex 0.3.3 reports Codex CLI 0.147.0. This fork also supports [xiurui-pan/SpineCodex](https://github.com/xiurui-pan/SpineCodex) 0.4.1, which reports 0.153.4. Official CLI updates remain part of future regression work. Later App releases align their version with the supported Desktop version.
+
 
 Fixes startup when a private inspectable Desktop clone changes independently
 of the installed application. The launcher previously reused that clone based

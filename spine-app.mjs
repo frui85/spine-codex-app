@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir, mkdtemp, rm } from "node:fs/promises";
 import { accessSync, constants } from "node:fs";
 import { createServer } from "node:net";
 import { createHash } from "node:crypto";
@@ -32,8 +32,30 @@ import {
   probeAppsProtocol,
 } from "./lib/spine-codex-compatibility.mjs";
 
+import {
+  createMacShellEnvironment,
+  verifyLocalAdapter,
+} from "./lib/mac-shell-environment.mjs";
+import {
+  superviseRenderer,
+  isMainRendererTarget,
+} from "./lib/renderer-supervisor.mjs";
+import {
+  createStatusBar,
+  statusBarHelper,
+  terminateDesktop,
+} from "./lib/status-bar.mjs";
+import {
+  ModeController,
+  MODE_LABELS,
+  validateMode,
+  readPreferences,
+  matchCliBaseline,
+} from "./lib/runtime-mode.mjs";
+import { waitForAdapter } from "./lib/adapter-handshake.mjs";
+
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "0.3.3.6";
+const APP_VERSION = "26.901.51231";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -55,7 +77,8 @@ const MIN_NODE_VERSION = "22.0.0";
 const MIN_MACOS_VERSION = "14.0.0";
 const MIN_WINDOWS_VERSION = "10.0.17763";
 const CODEX_DOWNLOAD_URL = "https://chatgpt.com/download/";
-const SPINE_CODEX_INSTALL_COMMAND = "npm install -g @spinejit/spine-codex@latest";
+const SPINE_CODEX_INSTALL_COMMAND =
+  "npm install -g @spinejit/spine-codex@latest";
 const NODE_OPTIONS_FUSE_INDEX = 2;
 const NODE_CLI_INSPECT_FUSE_INDEX = 3;
 // The first execution of a freshly signed Desktop clone waits for AMFI to
@@ -75,6 +98,9 @@ hosts use their own spine-codex command instead of codex.
 Options:
   --spine-codex PATH  SpineCodex binary (default: resolve from PATH)
   --app PATH          Codex executable or macOS app bundle (default: auto-detect)
+  --mode MODE         clone (default), adapter, or auto (clone with fallback)
+  --no-tray           Run without the macOS status bar
+  --user-data-dir DIR Use a separate Desktop profile (for isolated validation)
   --diagnose          Check every prerequisite without launching the app
   --json              Emit stable JSON output with --diagnose
   -V, --version       Print the wrapper version
@@ -87,141 +113,404 @@ if (args.version) {
   process.exit(0);
 }
 
-const diagnosis = await diagnose(args);
+args.mode ??= (await readPreferences()).mode;
+if (process.platform !== "darwin" && args.mode !== "clone")
+  fail("Adapter and auto modes currently require macOS.");
 
 if (args.diagnose) {
+  let diagnosis = await diagnose({
+    ...args,
+    mode: args.mode === "auto" ? "clone" : args.mode,
+  });
+  if (!diagnosis.ok && args.mode === "auto")
+    diagnosis = await diagnose({ ...args, mode: "adapter" });
   if (args.json) printDiagnosisJson(diagnosis);
   else printDiagnosis(diagnosis);
   process.exit(diagnosis.ok ? 0 : 1);
 }
+await runManagedApp();
 
-if (!diagnosis.ok) {
-  printDiagnosis(diagnosis, { stream: process.stderr });
-  console.error("\nFix the missing requirements above, then run: spine-app --diagnose");
-  process.exit(1);
-}
+async function startSession(diagnosis, mode, onHealth) {
+  const {
+    spineCodex,
+    appPath,
+    versionOutput,
+    commandSearchPath,
+    versionIdentity,
+    rendererSource: RENDERER_SOURCE,
+  } = diagnosis;
+  const localIdentityJson = JSON.stringify({
+    mode: versionIdentity.mode,
+    productVersion: versionIdentity.productVersion,
+    compatibilityVersion: versionIdentity.compatibilityVersion,
+  });
+  const SCRIPT =
+    `globalThis.__spineCodexRuntimeMode=${JSON.stringify(mode)};\n` +
+    prependRendererIdentity(RENDERER_SOURCE, localIdentityJson);
 
-const {
-  spineCodex,
-  appPath,
-  versionOutput,
-  commandSearchPath,
-  versionIdentity,
-  rendererSource: RENDERER_SOURCE,
-} = diagnosis;
-const localIdentityJson = JSON.stringify({
-  mode: versionIdentity.mode,
-  productVersion: versionIdentity.productVersion,
-  compatibilityVersion: versionIdentity.compatibilityVersion,
-});
-const SCRIPT = prependRendererIdentity(RENDERER_SOURCE, localIdentityJson);
-
-if (isAppRunning(appPath)) {
-  fail("Codex Desktop is running. Quit it completely, then run spine-app again.");
-}
-
-const debugPort = await reservePort();
-const mainInspectorPort = needsMainProcessInspector(diagnosis)
-  ? await reservePort()
-  : null;
-const mainHookStatusPath = join(
-  tmpdir(),
-  `spine-codex-main-hook-${process.pid}-${debugPort}.json`,
-);
-const deepLink = args.workspace == null
-  ? null
-  : `codex://threads/new?path=${encodeURIComponent(resolve(process.cwd(), args.workspace))}`;
-const appSearchPath = [LOCAL_CLI_DIR, commandSearchPath]
-  .filter(Boolean)
-  .join(delimiter);
-const mainHookOption = process.platform === "win32"
-  ? `--require "${ELECTRON_MAIN_HOOK.replaceAll('"', '\\"')}"`
-  : `--require ${JSON.stringify(ELECTRON_MAIN_HOOK)}`;
-const nodeOptions = [mainHookOption, process.env.NODE_OPTIONS].filter(Boolean).join(" ");
-const appEnvironment = {
-  ...process.env,
-  PATH: appSearchPath,
-  // Remote SSH must receive a portable command name. The verified Electron
-  // hook independently points only the local selector at the private shim, so
-  // a login-shell PATH refresh cannot bypass the output filter.
-  CODEX_CLI_PATH: REMOTE_CLI_NAME,
-  SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM,
-  SPINE_CODEX_BINARY: spineCodex,
-  SPINE_CODEX_SHIM_NODE: process.execPath,
-  SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
-  SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
-  SPINE_CODEX_LOCAL_IDENTITY_JSON: localIdentityJson,
-  SPINE_CODEX_RENDERER_PATH: join(HERE, "spine-view.js"),
-  SPINE_CODEX_RENDERER_SHA256:
-    createHash("sha256").update(RENDERER_SOURCE).digest("hex"),
-  NODE_OPTIONS: nodeOptions,
-};
-let launchAppPath = appPath;
-if (diagnosis.inspectableClone?.required) {
-  process.stdout.write("Preparing inspectable Codex Desktop clone… ");
-  const startedAt = Date.now();
-  try {
-    const clone = await prepareInspectableDesktopClone({
-      appPath,
-      cloneRoot: diagnosis.inspectableClone.root,
-    });
-    launchAppPath = clone.appPath;
-    console.log(
-      clone.reused
-        ? "reused."
-        : `created in ${((Date.now() - startedAt) / 1000).toFixed(1)}s.`,
-    );
-  } catch (error) {
-    fail(
-      "could not prepare an inspectable Codex Desktop clone; Codex was not " +
-        `started: ${error.message}`,
+  if (!args.userDataDir && isAppRunning(appPath)) {
+    throw new Error(
+      "Codex Desktop is running. Quit it completely, then run spine-app again.",
     );
   }
-}
-const launchedApp = await launchCodexApp({
-  appPath: launchAppPath,
-  deepLink,
-  debugPort,
-  mainInspectorPort,
-  appEnvironment,
-});
 
-if (mainInspectorPort != null) {
-  process.stdout.write("Injecting SpineCodex into Codex main process… ");
+  const sessionDirectory = await mkdtemp(join(tmpdir(), "spine-session-"));
+  let shellEnvironment = null;
+  let launchedApp = null;
+  let supervisor = null;
+  let stopped = false;
+  let stopping = false;
+  const abort = new AbortController();
+  const isRunning = () =>
+    launchedApp != null &&
+    launchedApp.exitCode == null &&
+    launchedApp.signalCode == null;
+  const cleanup = async () => {
+    if (stopped) return;
+    stopped = true;
+    abort.abort();
+    await supervisor?.catch(() => {});
+    await shellEnvironment?.dispose();
+    await rm(sessionDirectory, { recursive: true, force: true });
+  };
+  const stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    try {
+      if (isRunning()) {
+        if (process.platform === "darwin") {
+          const helper = await statusBarHelper(HERE);
+          await terminateDesktop({
+            helper,
+            child: launchedApp,
+            appPath: launchAppPath,
+          });
+        } else {
+          launchedApp.kill();
+        }
+      }
+      await cleanup();
+    } finally {
+      stopping = false;
+    }
+  };
+  let launchAppPath = appPath;
   try {
-    await injectMainProcessHook({
-      port: mainInspectorPort,
-      fallbackPorts: process.platform === "darwin" ? [9229] : [],
-      expectedPid: launchedApp?.pid ?? null,
-      hookPath: ELECTRON_MAIN_HOOK,
-      timeoutMs: MAIN_INSPECTOR_TIMEOUT_MS,
-    });
-  } catch (error) {
-    fail(
-      "Codex main-process injection failed; Codex was not allowed to " +
-        `continue unpatched: ${error.message}. ` +
-        "The launched Desktop process was left running; quit it manually " +
-        "before retrying.",
+    const debugPort = await reservePort();
+    const mainInspectorPort =
+      mode !== "adapter" && needsMainProcessInspector(diagnosis)
+        ? await reservePort()
+        : null;
+    const mainHookStatusPath = join(
+      sessionDirectory,
+      `spine-codex-main-hook-${process.pid}-${debugPort}.json`,
     );
+    const deepLink =
+      args.workspace == null
+        ? null
+        : `codex://threads/new?path=${encodeURIComponent(resolve(process.cwd(), args.workspace))}`;
+    const appSearchPath = [LOCAL_CLI_DIR, commandSearchPath]
+      .filter(Boolean)
+      .join(delimiter);
+    const mainHookOption =
+      process.platform === "win32"
+        ? `--require "${ELECTRON_MAIN_HOOK.replaceAll('"', '\\"')}"`
+        : `--require ${JSON.stringify(ELECTRON_MAIN_HOOK)}`;
+    const nodeOptions = [mainHookOption, process.env.NODE_OPTIONS]
+      .filter(Boolean)
+      .join(" ");
+    const appEnvironment = {
+      ...process.env,
+      PATH: appSearchPath,
+      // Remote SSH must receive a portable command name. The verified Electron
+      // hook independently points only the local selector at the private shim, so
+      // a login-shell PATH refresh cannot bypass the output filter.
+      CODEX_CLI_PATH: REMOTE_CLI_NAME,
+      SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM,
+      SPINE_CODEX_BINARY: spineCodex,
+      SPINE_CODEX_SHIM_NODE: process.execPath,
+      SPINE_CODEX_MIN_VERSION: MIN_SPINE_CODEX_VERSION,
+      SPINE_CODEX_MAIN_HOOK_STATUS: mainHookStatusPath,
+      SPINE_CODEX_LOCAL_IDENTITY_JSON: localIdentityJson,
+      SPINE_CODEX_RENDERER_PATH: join(HERE, "spine-view.js"),
+      SPINE_CODEX_RENDERER_SHA256: createHash("sha256")
+        .update(RENDERER_SOURCE)
+        .digest("hex"),
+      NODE_OPTIONS: mode === "adapter" ? "" : nodeOptions,
+      SPINE_CODEX_ADAPTER_STATUS: join(sessionDirectory, "adapter.json"),
+    };
+    if (mode === "adapter") {
+      shellEnvironment = await createMacShellEnvironment(LOCAL_CLI_DIR);
+      Object.assign(appEnvironment, shellEnvironment.env);
+      await verifyLocalAdapter(LOCAL_CLI_SHIM, appEnvironment);
+    }
+    if (mode !== "adapter" && diagnosis.inspectableClone?.required) {
+      process.stdout.write("Preparing inspectable Codex Desktop clone… ");
+      const startedAt = Date.now();
+      try {
+        const clone = await prepareInspectableDesktopClone({
+          appPath,
+          cloneRoot: diagnosis.inspectableClone.root,
+        });
+        launchAppPath = clone.appPath;
+        console.log(
+          clone.reused
+            ? "reused."
+            : `created in ${((Date.now() - startedAt) / 1000).toFixed(1)}s.`,
+        );
+      } catch (error) {
+        throw new Error(
+          "could not prepare an inspectable Codex Desktop clone; Codex was not " +
+            `started: ${error.message}`,
+        );
+      }
+    }
+    launchedApp = await launchCodexApp({
+      appPath: launchAppPath,
+      deepLink,
+      debugPort,
+      mainInspectorPort,
+      appEnvironment,
+    });
+
+    if (mainInspectorPort != null) {
+      process.stdout.write("Injecting SpineCodex into Codex main process… ");
+      try {
+        await injectMainProcessHook({
+          port: mainInspectorPort,
+          fallbackPorts: process.platform === "darwin" ? [9229] : [],
+          expectedPid: launchedApp?.pid ?? null,
+          hookPath: ELECTRON_MAIN_HOOK,
+          timeoutMs: MAIN_INSPECTOR_TIMEOUT_MS,
+        });
+      } catch (error) {
+        throw new Error(
+          "Codex main-process injection failed; Codex was not allowed to " +
+            `continue unpatched: ${error.message}. ` +
+            "The launcher will request a graceful stop before any fallback.",
+        );
+      }
+      console.log("ready.");
+    }
+
+    if (mode === "adapter") {
+      process.stdout.write(
+        "Waiting for Desktop adapter initialize and renderer… ",
+      );
+      let resolveReady, rejectReady;
+      const rendererReady = new Promise((resolve, reject) => {
+        resolveReady = resolve;
+        rejectReady = reject;
+      });
+      supervisor = superviseRenderer({
+        port: debugPort,
+        rendererSource: SCRIPT,
+        signal: abort.signal,
+        isDesktopRunning: isRunning,
+        onReady: resolveReady,
+        onHealth,
+      });
+      supervisor.then(
+        () =>
+          rejectReady(new Error("Desktop exited before renderer readiness")),
+        rejectReady,
+      );
+      await Promise.all([
+        rendererReady,
+        waitForAdapter(appEnvironment.SPINE_CODEX_ADAPTER_STATUS, {
+          isRunning,
+        }),
+      ]);
+    } else {
+      process.stdout.write(
+        "Waiting for Codex renderer and main-process hook… ",
+      );
+      const [target] = await Promise.all([
+        waitForTarget(debugPort),
+        waitForMainHookReady(mainHookStatusPath, {
+          timeoutMs: 20_000,
+          progressGraceMs: 10_000,
+          hardTimeoutMs: 30_000,
+          finalGraceMs: 500,
+        }),
+      ]);
+      await inject(target.webSocketDebuggerUrl, debugPort, SCRIPT);
+    }
+    console.log("Spine Tree ready.");
+    const baseline = matchCliBaseline(versionIdentity);
+    const done = new Promise((resolve) => {
+      if (!isRunning()) resolve();
+      else launchedApp.once("exit", resolve);
+    });
+    return {
+      stop,
+      cleanup,
+      done,
+      info: {
+        activeMode: mode,
+        activeModeLabel: MODE_LABELS[mode],
+        desktopVersion: diagnosis.desktopVersion,
+        productVersion: versionIdentity.productVersion ?? "未知",
+        compatibilityVersion: versionIdentity.compatibilityVersion,
+        baselineLabel: baseline
+          ? baseline.label + "（按版本匹配）"
+          : "当前 CLI 组合尚未回归",
+        desktopStatus:
+          diagnosis.desktopVersion ===
+          APP_VERSION.split(".").slice(0, 3).join(".")
+            ? "Desktop 与 App 目标版本匹配"
+            : "Desktop 非本次发布目标版本",
+        note:
+          mode === "adapter"
+            ? "历史恢复与 SSH 增强：仅副本模式提供"
+            : "历史恢复与 SSH 增强：已启用",
+      },
+    };
+  } catch (error) {
+    try {
+      await stop();
+    } catch (stopError) {
+      throw new Error(`${error.message}; cleanup failed: ${stopError.message}`);
+    }
+    throw error;
   }
-  console.log("ready.");
 }
 
-process.stdout.write("Waiting for Codex renderer and main-process hook… ");
-const [target] = await Promise.all([
-  waitForTarget(debugPort),
-  waitForMainHookReady(
-    mainHookStatusPath,
-    {
-      timeoutMs: 20_000,
-      progressGraceMs: 10_000,
-      hardTimeoutMs: 30_000,
-      finalGraceMs: 500,
+async function runManagedApp() {
+  if (process.platform === "darwin" && !args.userDataDir && isAppRunning(null)) {
+    fail("Codex Desktop is running. Quit it completely, then run spine-app again.");
+  }
+  if (process.platform === "darwin") await statusBarHelper(HERE);
+  let tray = null;
+  let shuttingDown = false;
+  let finish;
+  const closed = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const controller = new ModeController({
+    onState: (state) => tray?.update(state),
+    start: async (requestedMode) => {
+      const modes =
+        requestedMode === "auto" ? ["clone", "adapter"] : [requestedMode];
+      let lastError;
+      for (const mode of modes) {
+        const diagnosis = await diagnose({ ...args, mode });
+        if (!diagnosis.ok) {
+          lastError = new Error(
+            diagnosis.checks
+              .filter((c) => c.status === "error")
+              .map((c) => `${c.label}: ${c.detail}`)
+              .join("\n"),
+          );
+          continue;
+        }
+        tray?.update({
+          error: "",
+          note: "",
+          status: `正在启动${MODE_LABELS[mode]}…`,
+          activeModeLabel: MODE_LABELS[mode],
+          desktopVersion: diagnosis.desktopVersion,
+        });
+        try {
+          const session = await startSession(
+            diagnosis,
+            mode,
+            (health, detail) =>
+              tray?.update({
+                status:
+                  health === "ready"
+                    ? "Renderer 已连接"
+                    : "正在恢复 Renderer 连接…",
+                error: detail ?? "",
+              }),
+          );
+          if (lastError) {
+            session.info.note = `自动兜底：${lastError.message.slice(0, 80)}`;
+            console.log(`Automatic fallback to adapter: ${lastError.message}`);
+          }
+          session.done.then(async () => {
+            // During a controlled switch, the old process exit belongs to the
+            // transaction. It must not terminate the new launcher or shell.
+            while (controller.busy && !shuttingDown)
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            if (controller.session !== session || shuttingDown) return;
+            await session.cleanup();
+            tray?.dispose();
+            finish();
+          });
+          return session;
+        } catch (error) {
+          lastError = error;
+          if (!args.userDataDir && isAppRunning(diagnosis.appPath)) throw error;
+          if (modes.length > 1)
+            tray?.update({
+              status: "副本启动失败，尝试外部适配器…",
+              error: error.message,
+            });
+        }
+      }
+      throw lastError;
     },
-  ),
-]);
-await inject(target.webSocketDebuggerUrl, debugPort, SCRIPT);
-console.log("Spine Tree ready.");
+  });
+  if (process.platform === "darwin" && !args.noTray) {
+    tray = await createStatusBar({
+      root: HERE,
+      onAction: async (event) => {
+        try {
+          if (event.action === "quit") {
+            if (await controller.quit()) {
+              shuttingDown = true;
+              tray.dispose();
+              finish();
+            }
+          } else {
+            await controller.switchTo(
+              event.action === "switch" ? event.mode : controller.mode,
+            );
+          }
+        } catch (error) {
+          tray.update({ busy: false, error: error.message });
+          console.error(error.message);
+        }
+      },
+    });
+    tray.update({
+      appVersion: APP_VERSION,
+      requestedMode: args.mode,
+      busy: true,
+      status: "检查兼容性…",
+    });
+  }
+  const quit = async () => {
+    try {
+      if (await controller.quit()) {
+        shuttingDown = true;
+        tray?.dispose();
+        finish();
+      }
+    } catch (error) {
+      console.error(error.message);
+      tray?.update({ error: error.message });
+    }
+  };
+  process.on("SIGINT", quit);
+  process.on("SIGTERM", quit);
+  try {
+    await controller.switchTo(args.mode, { persist: false });
+  } catch (error) {
+    if (!tray) throw error;
+    console.error(error.message);
+  }
+  // Preserve the original one-shot CLI behavior when no tray or external
+  // supervisor was requested. Do not extend the detached Desktop lifetime.
+  if (args.noTray && controller.session?.info.activeMode === "clone") {
+    await controller.session.cleanup();
+  } else {
+    await closed;
+  }
+  process.removeListener("SIGINT", quit);
+  process.removeListener("SIGTERM", quit);
+}
 
 function parseArgs(values) {
   const parsed = {
@@ -232,15 +521,25 @@ function parseArgs(values) {
     json: false,
     version: false,
     help: false,
+    mode: null,
+    noTray: false,
+    userDataDir: null,
   };
   for (let index = 0; index < values.length; index += 1) {
     const value = values[index];
     if (value === "-h" || value === "--help") parsed.help = true;
     else if (value === "-V" || value === "--version") parsed.version = true;
+    else if (value === "--user-data-dir")
+      parsed.userDataDir = resolve(requiredValue(values, ++index, value));
+    else if (value === "--mode")
+      parsed.mode = validateMode(requiredValue(values, ++index, value));
+    else if (value === "--no-tray") parsed.noTray = true;
     else if (value === "--diagnose") parsed.diagnose = true;
     else if (value === "--json") parsed.json = true;
-    else if (value === "--spine-codex") parsed.spineCodex = requiredValue(values, ++index, value);
-    else if (value === "--app") parsed.app = requiredValue(values, ++index, value);
+    else if (value === "--spine-codex")
+      parsed.spineCodex = requiredValue(values, ++index, value);
+    else if (value === "--app")
+      parsed.app = requiredValue(values, ++index, value);
     else if (value.startsWith("-")) fail(`unknown option: ${value}`);
     else parsed.workspace = value;
   }
@@ -250,7 +549,9 @@ function parseArgs(values) {
 
 function needsMainProcessInspector(currentDiagnosis) {
   if (process.platform === "win32") return true;
-  return process.platform === "darwin" && currentDiagnosis.nodeOptionsFuse !== "on";
+  return (
+    process.platform === "darwin" && currentDiagnosis.nodeOptionsFuse !== "on"
+  );
 }
 
 function requiredValue(values, index, option) {
@@ -267,11 +568,12 @@ function prependRendererIdentity(source, identityJson) {
 }
 
 function findExecutable(name, searchPath = process.env.PATH ?? "") {
-  const extensions = process.platform === "win32" && extname(name) === ""
-    ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
-        .split(";")
-        .filter(Boolean)
-    : [""];
+  const extensions =
+    process.platform === "win32" && extname(name) === ""
+      ? (process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM")
+          .split(";")
+          .filter(Boolean)
+      : [""];
   for (const directory of searchPath.split(delimiter)) {
     if (!directory) continue;
     for (const extension of extensions) {
@@ -366,7 +668,11 @@ async function diagnose(options) {
       bytes: Buffer.byteLength(rendererSource),
       sha256: createHash("sha256").update(rendererSource).digest("hex"),
     };
-    add("ok", "Wrapper files", `${Buffer.byteLength(rendererSource)} byte renderer`);
+    add(
+      "ok",
+      "Wrapper files",
+      `${Buffer.byteLength(rendererSource)} byte renderer`,
+    );
   } catch (error) {
     add(
       "error",
@@ -402,7 +708,10 @@ async function diagnose(options) {
         encoding: "utf8",
         env: { ...process.env, PATH: commandSearchPath },
       });
-      versionOutput = [version.stdout, version.stderr].filter(Boolean).join("\n").trim();
+      versionOutput = [version.stdout, version.stderr]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
       if (version.status !== 0) {
         add(
           "error",
@@ -445,9 +754,10 @@ async function diagnose(options) {
           } else {
             spineCodex = requestedSpineCodex;
             const product = versionIdentity.productVersion ?? "unknown product";
-            const detail = versionIdentity.mode === "legacy"
-              ? `${product} legacy identity · ${requestedSpineCodex}`
-              : `${product} product · Codex ${compatibilityVersion} compatibility · ${requestedSpineCodex}`;
+            const detail =
+              versionIdentity.mode === "legacy"
+                ? `${product} legacy identity · ${requestedSpineCodex}`
+                : `${product} product · Codex ${compatibilityVersion} compatibility · ${requestedSpineCodex}`;
             add("ok", "SpineCodex", detail);
             if (
               versionIdentity.productVersion &&
@@ -519,13 +829,45 @@ async function diagnose(options) {
           throw new Error("the Windows App path must point to an .exe file");
         }
       }
-      nodeOptionsFuse = await readElectronFuse(appPath, NODE_OPTIONS_FUSE_INDEX);
+      nodeOptionsFuse = await readElectronFuse(
+        appPath,
+        NODE_OPTIONS_FUSE_INDEX,
+      );
       nodeCliInspectFuse = await readElectronFuse(
         appPath,
         NODE_CLI_INSPECT_FUSE_INDEX,
       );
       desktopVersion = readDesktopVersion(appPath);
-      if (process.platform === "win32" && nodeCliInspectFuse === "on") {
+      if (process.platform === "darwin" && options.mode === "adapter") {
+        add("ok", "Codex Desktop", appPath);
+        if (!desktopVersion) add("error", "External adapter", "Desktop version could not be read");
+        if (compareVersions(desktopVersion, "26.901.20858") < 0)
+          add(
+            "error",
+            "External adapter",
+            "Desktop is older than the external adapter baseline 26.901.20858",
+          );
+        if (
+          versionIdentity &&
+          compareVersions(versionIdentity.compatibilityVersion, "0.147.0") < 0
+        )
+          add(
+            "error",
+            "External adapter",
+            "Use SpineCodex 0.3.3 / Codex CLI 0.147.0 or newer for adapter mode",
+          );
+        if (basename(process.env.SHELL || "/bin/zsh") !== "zsh")
+          add(
+            "error",
+            "External adapter",
+            "External adapter currently requires zsh; choose clone mode for other shells",
+          );
+        add(
+          "info",
+          "CLI compatibility",
+          "External adapter; no main-process hook or Desktop copy required",
+        );
+      } else if (process.platform === "win32" && nodeCliInspectFuse === "on") {
         add("ok", "Codex Desktop", appPath);
         add(
           "ok",
@@ -550,7 +892,11 @@ async function diagnose(options) {
         );
       } else if (process.platform === "darwin" && nodeOptionsFuse === "on") {
         add("ok", "Codex Desktop", appPath);
-        add("ok", "SSH compatibility hook", "Electron NODE_OPTIONS fuse is enabled");
+        add(
+          "ok",
+          "SSH compatibility hook",
+          "Electron NODE_OPTIONS fuse is enabled",
+        );
       } else if (
         process.platform === "darwin" &&
         ["off", "removed"].includes(nodeCliInspectFuse)
@@ -592,12 +938,12 @@ async function diagnose(options) {
           `Electron NODE_OPTIONS fuse is ${nodeOptionsFuse}; loopback Inspector injection required`,
         );
       } else {
-        const fuseName = process.platform === "win32"
-          ? "main-process Inspector"
-          : "NODE_OPTIONS";
-        const fuseValue = process.platform === "win32"
-          ? nodeCliInspectFuse
-          : nodeOptionsFuse;
+        const fuseName =
+          process.platform === "win32"
+            ? "main-process Inspector"
+            : "NODE_OPTIONS";
+        const fuseValue =
+          process.platform === "win32" ? nodeCliInspectFuse : nodeOptionsFuse;
         add(
           "error",
           "Codex Desktop",
@@ -616,7 +962,11 @@ async function diagnose(options) {
     }
   }
 
-  if (desktopValidated && process.platform === "darwin") {
+  if (
+    desktopValidated &&
+    process.platform === "darwin" &&
+    options.mode !== "adapter"
+  ) {
     try {
       bundleContract = await inspectDesktopBundleContract(appPath, {
         minimum: MIN_SPINE_CODEX_VERSION,
@@ -636,6 +986,11 @@ async function diagnose(options) {
         `Install a supported current build from ${CODEX_DOWNLOAD_URL}`,
       );
     }
+  } else if (desktopValidated && options.mode === "adapter") {
+    bundleContract = {
+      status: "external-adapter",
+      reason: "Verified through CLI initialization at launch",
+    };
   } else if (desktopValidated) {
     bundleContract = { status: "runtime-required", reason: null };
     add(
@@ -645,11 +1000,16 @@ async function diagnose(options) {
     );
   }
 
-  add("info", "Remote requirement", `${REMOTE_CLI_NAME} >= ${MIN_SPINE_CODEX_VERSION} on each SSH host`);
+  add(
+    "info",
+    "Remote requirement",
+    `${REMOTE_CLI_NAME} >= ${MIN_SPINE_CODEX_VERSION} on each SSH host`,
+  );
   add("info", "Image generation", "disabled for SpineCodex compatibility");
   const ok = checks.every((check) => check.status !== "error");
   return {
     ok,
+    startupMode: options.mode ?? "clone",
     checks,
     spineCodex,
     appPath,
@@ -668,7 +1028,12 @@ async function diagnose(options) {
 }
 
 function resolveExecutableOption(value) {
-  if (isAbsolute(value) || value.includes("/") || value.includes("\\") || value.startsWith(".")) {
+  if (
+    isAbsolute(value) ||
+    value.includes("/") ||
+    value.includes("\\") ||
+    value.startsWith(".")
+  ) {
     return resolve(value);
   }
   return findExecutable(value);
@@ -680,7 +1045,9 @@ function discoverLoginPath() {
       process.env.PATH,
       process.env.APPDATA ? join(process.env.APPDATA, "npm") : "",
       process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "npm") : "",
-      process.env.USERPROFILE ? join(process.env.USERPROFILE, ".volta", "bin") : "",
+      process.env.USERPROFILE
+        ? join(process.env.USERPROFILE, ".volta", "bin")
+        : "",
       process.env.NVM_SYMLINK,
       process.env.NVM_HOME,
     );
@@ -693,7 +1060,8 @@ function discoverLoginPath() {
       timeout: 5_000,
       maxBuffer: 256 * 1024,
     });
-    if (result.status === 0 && result.stdout.includes("/")) return result.stdout.trim();
+    if (result.status === 0 && result.stdout.includes("/"))
+      return result.stdout.trim();
   } catch {}
   return "";
 }
@@ -702,7 +1070,8 @@ function mergeSearchPaths(...values) {
   const directories = [];
   for (const value of values) {
     for (const directory of (value ?? "").split(delimiter)) {
-      if (directory && !directories.includes(directory)) directories.push(directory);
+      if (directory && !directories.includes(directory))
+        directories.push(directory);
     }
   }
   return directories.join(delimiter);
@@ -711,7 +1080,8 @@ function mergeSearchPaths(...values) {
 async function findSpineCodex(commandSearchPath) {
   const candidates = [];
   const add = (candidate) => {
-    if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    if (candidate && !candidates.includes(candidate))
+      candidates.push(candidate);
   };
   add(process.env.SPINE_CODEX_BINARY);
   add(findExecutable("spine-codex", commandSearchPath));
@@ -720,7 +1090,9 @@ async function findSpineCodex(commandSearchPath) {
     for (const directory of [
       process.env.APPDATA ? join(process.env.APPDATA, "npm") : null,
       process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "npm") : null,
-      process.env.USERPROFILE ? join(process.env.USERPROFILE, ".volta", "bin") : null,
+      process.env.USERPROFILE
+        ? join(process.env.USERPROFILE, ".volta", "bin")
+        : null,
       process.env.NVM_SYMLINK,
     ]) {
       if (!directory) continue;
@@ -735,14 +1107,17 @@ async function findSpineCodex(commandSearchPath) {
       join(homedir(), ".local", "bin", "spine-codex"),
       join(homedir(), ".npm-global", "bin", "spine-codex"),
       join(homedir(), ".volta", "bin", "spine-codex"),
-    ]) add(candidate);
+    ])
+      add(candidate);
   }
 
   if (process.platform !== "win32") {
     const nvmVersions = join(homedir(), ".nvm", "versions", "node");
     try {
       const versions = await readdir(nvmVersions);
-      versions.sort((left, right) => right.localeCompare(left, undefined, { numeric: true }));
+      versions.sort((left, right) =>
+        right.localeCompare(left, undefined, { numeric: true }),
+      );
       for (const version of versions) {
         add(join(nvmVersions, version, "bin", "spine-codex"));
       }
@@ -768,12 +1143,16 @@ function parseSystemVersion(output) {
 }
 
 function printDiagnosis(diagnosis, { stream = process.stdout } = {}) {
-  stream.write(`Spine App preflight: ${diagnosis.ok ? "ready" : "action required"}\n`);
+  stream.write(
+    `Spine App preflight: ${diagnosis.ok ? "ready" : "action required"}\n`,
+  );
   for (const check of diagnosis.checks) {
-    const marker = check.status === "ok" ? "✓" : check.status === "error" ? "✗" : "•";
+    const marker =
+      check.status === "ok" ? "✓" : check.status === "error" ? "✗" : "•";
     stream.write(`${marker} ${check.label}: ${check.detail}\n`);
     if (check.remedy) {
-      for (const line of check.remedy.split("\n")) stream.write(`  → ${line}\n`);
+      for (const line of check.remedy.split("\n"))
+        stream.write(`  → ${line}\n`);
     }
   }
 }
@@ -781,6 +1160,7 @@ function printDiagnosis(diagnosis, { stream = process.stdout } = {}) {
 function printDiagnosisJson(diagnosis, { stream = process.stdout } = {}) {
   const payload = {
     schemaVersion: 1,
+    startupMode: diagnosis.startupMode,
     ok: diagnosis.ok,
     app: { version: APP_VERSION },
     spineCodex: {
@@ -793,16 +1173,18 @@ function printDiagnosisJson(diagnosis, { stream = process.stdout } = {}) {
       productVersionSource:
         diagnosis.versionIdentity?.productVersionSource ?? "unavailable",
       productPackagePath: diagnosis.versionIdentity?.productPackagePath ?? null,
-      compatibilityVersion: diagnosis.versionIdentity?.compatibilityVersion ?? null,
+      compatibilityVersion:
+        diagnosis.versionIdentity?.compatibilityVersion ?? null,
       appsProtocol: diagnosis.appsProtocol,
     },
     codexDesktop: {
       path: diagnosis.appPath,
       version: diagnosis.desktopVersion,
       validatedVersions: VALIDATED_DESKTOP_VERSIONS,
-      validatedBuild: diagnosis.desktopVersion == null
-        ? null
-        : VALIDATED_DESKTOP_VERSIONS.includes(diagnosis.desktopVersion),
+      validatedBuild:
+        diagnosis.desktopVersion == null
+          ? null
+          : VALIDATED_DESKTOP_VERSIONS.includes(diagnosis.desktopVersion),
       nodeOptionsFuse: diagnosis.nodeOptionsFuse,
       nodeCliInspectFuse: diagnosis.nodeCliInspectFuse,
       bundleContract: diagnosis.bundleContract,
@@ -831,10 +1213,18 @@ function readDesktopVersion(applicationPath) {
     return result.status === 0 ? result.stdout.trim() || null : null;
   }
   if (process.platform === "win32") {
-    const script = "(Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion";
+    const script =
+      "(Get-Item -LiteralPath $args[0]).VersionInfo.ProductVersion";
     const result = spawnSync(
       "powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script, applicationPath],
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        script,
+        applicationPath,
+      ],
       { encoding: "utf8", timeout: 5_000, windowsHide: true },
     );
     return result.status === 0 ? result.stdout.trim() || null : null;
@@ -867,7 +1257,8 @@ async function findApp() {
     seen.add(candidate);
     // The private inspectable clone shares the Desktop bundle identifier, so
     // Spotlight may list it; only the official installation is a launch source.
-    if (candidate === cloneRoot || candidate.startsWith(`${cloneRoot}/`)) continue;
+    if (candidate === cloneRoot || candidate.startsWith(`${cloneRoot}/`))
+      continue;
     try {
       await access(candidate, constants.R_OK);
       return candidate;
@@ -879,7 +1270,8 @@ async function findApp() {
 async function findWindowsApp() {
   const candidates = [];
   const add = (candidate) => {
-    if (candidate && !candidates.includes(candidate)) candidates.push(candidate);
+    if (candidate && !candidates.includes(candidate))
+      candidates.push(candidate);
   };
   add(process.env.CODEX_APP_PATH);
   if (process.env.LOCALAPPDATA) {
@@ -991,10 +1383,10 @@ foreach ($entry in @(Get-StartApps)) {
       await access(candidate, constants.R_OK);
       firstReadable ??= candidate;
       if (
-        await readElectronFuseFromBinary(
+        (await readElectronFuseFromBinary(
           candidate,
           NODE_CLI_INSPECT_FUSE_INDEX,
-        ) === "on"
+        )) === "on"
       ) {
         return candidate;
       }
@@ -1010,17 +1402,11 @@ async function readElectronFuse(applicationPath, fuseIndex) {
   const frameworksPath = join(applicationPath, "Contents", "Frameworks");
   const entries = await readdir(frameworksPath, { withFileTypes: true });
   const frameworkBundle = entries.find(
-    (entry) =>
-      entry.isDirectory() &&
-      / Framework\.framework$/.test(entry.name),
+    (entry) => entry.isDirectory() && / Framework\.framework$/.test(entry.name),
   )?.name;
   if (!frameworkBundle) return "not-found";
   const frameworkName = frameworkBundle.slice(0, -".framework".length);
-  const framework = join(
-    frameworksPath,
-    frameworkBundle,
-    frameworkName,
-  );
+  const framework = join(frameworksPath, frameworkBundle, frameworkName);
   return readElectronFuseFromBinary(framework, fuseIndex);
 }
 
@@ -1051,10 +1437,11 @@ if ($null -eq $running) { exit 1 } else { exit 0 }
     );
     return check.status === 0;
   }
-  const check = spawnSync("/usr/bin/osascript", [
-    "-e",
-    'application id "com.openai.codex" is running',
-  ], { encoding: "utf8" });
+  const check = spawnSync(
+    "/usr/bin/osascript",
+    ["-e", 'application id "com.openai.codex" is running'],
+    { encoding: "utf8" },
+  );
   return check.status === 0 && check.stdout.trim() === "true";
 }
 
@@ -1068,24 +1455,31 @@ async function launchCodexApp({
   const electronArguments = [
     "--remote-debugging-address=127.0.0.1",
     `--remote-debugging-port=${debugPort}`,
+    ...(args.userDataDir ? [`--user-data-dir=${args.userDataDir}`] : []),
   ];
   if (process.platform === "darwin") {
-    if (mainInspectorPort != null) {
+    {
       const executable = resolveMacOsExecutable(appPath);
       // The launched bundle is either a Desktop build whose Node CLI inspect
       // fuse is enabled or the private inspectable clone prepared above, so
       // `--inspect-brk` pauses the main process before its first script and
       // the hook is loaded through the loopback Inspector before it resumes.
-      const child = spawn(executable, [
-        ...electronArguments,
-        `--inspect-brk=127.0.0.1:${mainInspectorPort}`,
-        ...(deepLink ? [deepLink] : []),
-      ], {
-        cwd: dirname(executable),
-        detached: true,
-        env: appEnvironment,
-        stdio: "ignore",
-      });
+      const child = spawn(
+        executable,
+        [
+          ...electronArguments,
+          ...(mainInspectorPort != null
+            ? [`--inspect-brk=127.0.0.1:${mainInspectorPort}`]
+            : []),
+          ...(deepLink ? [deepLink] : []),
+        ],
+        {
+          cwd: dirname(executable),
+          detached: true,
+          env: appEnvironment,
+          stdio: "ignore",
+        },
+      );
       await new Promise((resolve, reject) => {
         child.once("spawn", resolve);
         child.once("error", reject);
@@ -1093,45 +1487,10 @@ async function launchCodexApp({
       child.unref();
       return child;
     }
-    const openArguments = [
-      "-n",
-      "--env",
-      `PATH=${appEnvironment.PATH}`,
-      "--env",
-      `CODEX_CLI_PATH=${appEnvironment.CODEX_CLI_PATH}`,
-      "--env",
-      `SPINE_CODEX_LOCAL_CLI_PATH=${appEnvironment.SPINE_CODEX_LOCAL_CLI_PATH}`,
-      "--env",
-      `SPINE_CODEX_BINARY=${appEnvironment.SPINE_CODEX_BINARY}`,
-      "--env",
-      `SPINE_CODEX_SHIM_NODE=${appEnvironment.SPINE_CODEX_SHIM_NODE}`,
-      "--env",
-      `SPINE_CODEX_MIN_VERSION=${appEnvironment.SPINE_CODEX_MIN_VERSION}`,
-      "--env",
-      `SPINE_CODEX_MAIN_HOOK_STATUS=${appEnvironment.SPINE_CODEX_MAIN_HOOK_STATUS}`,
-      "--env",
-      `SPINE_CODEX_LOCAL_IDENTITY_JSON=${appEnvironment.SPINE_CODEX_LOCAL_IDENTITY_JSON}`,
-      "--env",
-      `SPINE_CODEX_RENDERER_PATH=${appEnvironment.SPINE_CODEX_RENDERER_PATH}`,
-      "--env",
-      `SPINE_CODEX_RENDERER_SHA256=${appEnvironment.SPINE_CODEX_RENDERER_SHA256}`,
-      "--env",
-      `NODE_OPTIONS=${appEnvironment.NODE_OPTIONS}`,
-      "-a",
-      appPath,
-    ];
-    if (deepLink) openArguments.push(deepLink);
-    openArguments.push("--args", ...electronArguments);
-    const child = spawn("/usr/bin/open", openArguments, { stdio: "inherit" });
-    const status = await new Promise((resolve) => child.once("exit", resolve));
-    if (status !== 0) fail(`open exited with status ${status}`);
-    return null;
   }
 
   if (mainInspectorPort != null) {
-    electronArguments.unshift(
-      `--inspect-brk=127.0.0.1:${mainInspectorPort}`,
-    );
+    electronArguments.unshift(`--inspect-brk=127.0.0.1:${mainInspectorPort}`);
   }
   const appArguments = deepLink
     ? [...electronArguments, deepLink]
@@ -1167,7 +1526,7 @@ function reservePort() {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      server.close((error) => error ? reject(error) : resolve(address.port));
+      server.close((error) => (error ? reject(error) : resolve(address.port)));
     });
   });
 }
@@ -1182,32 +1541,39 @@ async function waitForTarget(port) {
       });
       if (!response.ok) throw new Error(`CDP returned HTTP ${response.status}`);
       const targets = await response.json();
-      const target = targets.find((item) =>
-        item.type === "page" &&
-        typeof item.webSocketDebuggerUrl === "string" &&
-        (item.url?.startsWith("app://") ||
-          item.url?.startsWith("codex://") ||
-          /codex|chatgpt/i.test(item.title ?? "")));
+      const candidates = targets.filter(isMainRendererTarget);
+      if (candidates.length > 1)
+        throw new Error("ambiguous main Renderer targets");
+      const target = candidates[0];
       if (target) return target;
     } catch (error) {
       lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  throw new Error(`timed out waiting for Codex renderer: ${lastError?.message ?? "no target"}`);
+  throw new Error(
+    `timed out waiting for Codex renderer: ${lastError?.message ?? "no target"}`,
+  );
 }
 
 async function inject(webSocketUrl, port, source) {
   const url = new URL(webSocketUrl);
-  if (url.protocol !== "ws:" || !["127.0.0.1", "::1"].includes(url.hostname) ||
-      Number(url.port) !== port) {
+  if (
+    url.protocol !== "ws:" ||
+    !["127.0.0.1", "::1"].includes(url.hostname) ||
+    Number(url.port) !== port
+  ) {
     throw new Error("refusing unsafe CDP WebSocket URL");
   }
   const socket = new WebSocket(url);
   await Promise.race([
     new Promise((resolve, reject) => {
       socket.addEventListener("open", resolve, { once: true });
-      socket.addEventListener("error", () => reject(new Error("CDP connection failed")), { once: true });
+      socket.addEventListener(
+        "error",
+        () => reject(new Error("CDP connection failed")),
+        { once: true },
+      );
     }),
     timeout(4_000, "CDP connection timed out"),
   ]);
@@ -1221,7 +1587,8 @@ async function inject(webSocketUrl, port, source) {
           const message = JSON.parse(event.data);
           if (message.id !== id) return;
           socket.removeEventListener("message", listener);
-          if (message.error) reject(new Error(`${method}: ${JSON.stringify(message.error)}`));
+          if (message.error)
+            reject(new Error(`${method}: ${JSON.stringify(message.error)}`));
           else resolve(message.result);
         };
         socket.addEventListener("message", listener);
@@ -1231,13 +1598,19 @@ async function inject(webSocketUrl, port, source) {
   };
   await command("Page.enable", {});
   await command("Page.addScriptToEvaluateOnNewDocument", { source });
-  const result = await command("Runtime.evaluate", { expression: source, returnByValue: true });
+  const result = await command("Runtime.evaluate", {
+    expression: source,
+    returnByValue: true,
+  });
   socket.close();
-  if (result?.exceptionDetails) throw new Error("renderer injection raised an exception");
+  if (result?.exceptionDetails)
+    throw new Error("renderer injection raised an exception");
 }
 
 function timeout(milliseconds, message) {
-  return new Promise((_, reject) => setTimeout(() => reject(new Error(message)), milliseconds));
+  return new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(message)), milliseconds),
+  );
 }
 
 function fail(message) {

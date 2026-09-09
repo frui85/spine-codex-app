@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v0.3.3.6"><img alt="Release v0.3.3.6" src="https://img.shields.io/badge/release-v0.3.3.6-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231"><img alt="Release v26.901.51231" src="https://img.shields.io/badge/release-v26.901.51231-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -105,12 +105,29 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.3.3.6-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.3.3.6-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v26.901.51231-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v26.901.51231-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-x64.dmg) |
 
 The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
 > The initial public build is ad-hoc signed because the project does not yet have a Developer ID certificate. If macOS blocks the first launch, right-click the app and choose **Open**, or allow it once in **System Settings → Privacy & Security**. SHA-256 files are published beside both DMGs.
+
+### CLI baselines and the macOS menu bar
+
+| CLI source | SpineCodex product | Codex CLI compatibility |
+|---|---|---|
+| [Official](https://github.com/GhabiX/SpineCodex) | 0.3.3 | 0.147.0 |
+| [Supported fork](https://github.com/xiurui-pan/SpineCodex) | 0.4.1 | 0.153.4 |
+
+Official 0.3.3 follows an older Codex baseline. Fork 0.4.1 supplements support for the newer CLI baseline; official CLI updates will continue to receive regression testing. The wrapper never automatically replaces your installed CLI. A version-pair match identifies an adaptation baseline, not binary provenance.
+
+The native menu bar shows actual startup mode, Desktop version, CLI product/compatibility versions, and connection health. It provides mode switching, restart, and copyable adaptation information.
+
+- **Clone (default):** preserves private-clone validation, main-process hooks, replay/memory recovery, and SSH bootstrap protection.
+- **External adapter:** uses the original signed Desktop, verifies zsh PATH selection and actual adapter initialization, and supervises the Renderer through loopback CDP. Requires CLI compatibility 0.147.0 or newer. Clone-only replay recovery and SSH bootstrap patches are unavailable.
+- **Auto:** prefers clone mode, falling back to the external adapter only after the failed instance stops. The actual mode and fallback reason remain visible.
+
+Switching asks to restart Desktop and can interrupt active tasks. Preferences commit after readiness; failed switches attempt to restore the old mode. Preferences live in `~/Library/Application Support/SpineCodex App/preferences.json`. Override one launch with `--mode clone|adapter|auto`; use `--no-tray` to omit the menu bar (clone mode then returns after readiness; adapter mode keeps its supervisor running). Example: `./spine-app --mode adapter --diagnose --json`.
 
 ### Windows x64 portable build
 
@@ -161,17 +178,11 @@ SpineCodex App
        └─ turn/spineSpawnProgress/updated
 ```
 
-The launcher does not modify `app.asar`, replace the Codex React tree, or patch the application on disk. Renderer integration uses a Shadow DOM surface and narrow structural hooks. Local startup uses a dedicated absolute path to the wrapper's private shim, so a Desktop login-shell environment refresh cannot bypass its output filter. Remote SSH keeps the portable command name `spine-codex`, resolved independently by each host's login shell. Remote bootstrap is serialized and idempotent: it reuses a healthy SpineCodex server, replaces only a same-user stale or official-Codex socket owner, and does not start the proxy until the Unix socket is demonstrably ready. A one-time launcher/main-process readiness handshake verifies the local selector, version check, and SSH bootstrap structures before startup is reported as successful; unknown bundles fail closed.
+Both modes share the local protocol adapter and app catalog output filter, with image generation temporarily disabled. Clone mode keeps the in-process event listeners and compatibility patches; it changes and signs only a private Desktop copy.
 
-The verified main hook also keeps two narrow Electron lifecycle listeners. It
-SHA-256 verifies the packaged `spine-view.js` at startup. On each main-window
-`did-finish-load`—including a reload after an Electron renderer crash—it reads
-the same absolute resource path again and executes the current renderer only in
-the exact `app://-/index.html` surface. This prevents a long-running main
-process from reviving an older in-memory renderer after the installed wrapper
-has been updated. There is no timer, polling watchdog, or extra resident
-process. The renderer's own revision guard makes the initial CDP injection and
-any recovery injection idempotent.
+External mode adopts upstream's adapter/supervisor architecture, fixes PATH priority, and verifies the actual initialize response through the private adapter before readiness. The supervisor polls once per second, targets only the main Renderer, and reconnects while its owned Desktop is alive. Its temporary shell environment lasts until Desktop exits. Restart the external supervisor after upgrading wrapper scripts.
+
+The launcher remains alive to manage the menu bar and restart transactions. Mode changes quit only the tracked Desktop PID with the matching bundle path, and do not force-kill other applications.
 
 See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled runtime notices.
 
@@ -181,25 +192,26 @@ See [SECURITY.md](SECURITY.md) for the trust boundary and [THIRD_PARTY_NOTICES.m
 <summary><strong>Run from source</strong></summary>
 
 ```sh
-git clone https://github.com/izumedonabe/spine-codex-app.git
+git clone https://github.com/frui85/spine-codex-app.git
 cd spine-codex-app
+npm run build:statusbar
 ./spine-app --diagnose
 ./spine-app
 ./spine-app /path/to/workspace
 ```
 
-Source usage requires Node.js 22 or newer. Opening without a path launches the existing Codex interface; it does not create a task rooted at `/`. The launcher exits after verifying the main hook and initial renderer injection; Codex Desktop keeps running, and the in-process lifecycle listeners recover Spine View if Electron replaces its renderer.
+Source usage requires Node.js 22 or newer. Opening without a path launches the existing Codex interface; it does not create a task rooted at `/`. The launcher remains alive for mode switching and supervision, then cleans up when Desktop exits. Source builds of the native menu bar require Xcode Command Line Tools; releases contain the compiled helper.
 
 </details>
 
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-This release is **v0.3.3.6**: the first three components identify the recommended SpineCodex validation baseline, and the fourth identifies an App-only revision. The compatibility floor remains SpineCodex 0.2.2. Product version, Codex-compatible identity, and minimum support are separate fields; version tracking does not mean SpineCodex is redistributed here.
+This release is **v26.901.51231**: the first three components match the target Codex Desktop version, following the official App's release convention. A later wrapper revision for the same Desktop can append a fourth component, for example `26.901.51231.1`. CLI product and compatibility versions remain separate metadata. Historical release numbers are preserved.
 
 Pushing a matching `v*` tag starts the checked-in GitHub Actions release pipeline. The workflow validates the tag against `package.json#spineAppVersion`, runs the full checks, builds and verifies both macOS DMGs, uploads immutable workflow artifacts, and only then publishes the GitHub Release. Release creation begins as a draft so a failed upload cannot expose a partial release. Windows workflow code is present but intentionally disabled.
 
-The current bundle contract is validated against ChatGPT/Codex Desktop builds `26.810.41047`, `26.818.41509`, `26.825.51511`, `26.901.20858`, and `26.901.51231`. On macOS, a build with the `nodeCliInspect` fuse set to `off` or `removed` cannot be injected in place: Electron ignores `--inspect*` and `SIGUSR1`. SpineCodex App therefore prepares a private inspectable clone of the installed bundle under `~/Library/Application Support/SpineCodex App/inspectable-desktop/` (an APFS clone with only that fuse re-enabled and a hardened-runtime ad-hoc signature), launches the clone paused on a loopback-only `--inspect-brk` port, verifies the PID, and injects the main hook before Renderer startup. The original `ChatGPT.app` stays unmodified, the clone is rebuilt after every Desktop update, and `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1` restores the fail-closed preflight error instead. Diagnostics scan the installed macOS `app.asar` read-only and require exactly one main-process patch target plus one shared version/CLI-selector target. Unknown or ambiguous structures fail closed. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the main-process Inspector path still requires broader real-device validation before Windows is published as a supported GitHub Release asset.
+The clone mode historical bundle contract was validated against ChatGPT/Codex Desktop builds `26.810.41047`, `26.818.41509`, `26.825.51511`, `26.901.20858`, and `26.901.51231`. On macOS, a build with the `nodeCliInspect` fuse set to `off` or `removed` cannot be injected in place: Electron ignores `--inspect*` and `SIGUSR1`. SpineCodex App therefore prepares a private inspectable clone of the installed bundle under `~/Library/Application Support/SpineCodex App/inspectable-desktop/` (an APFS clone with only that fuse re-enabled and a hardened-runtime ad-hoc signature), launches the clone paused on a loopback-only `--inspect-brk` port, verifies the PID, and injects the main hook before Renderer startup. The original `ChatGPT.app` stays unmodified, the clone is rebuilt after every Desktop update, and `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1` restores the fail-closed preflight error instead. Diagnostics scan the installed macOS `app.asar` read-only and require exactly one main-process patch target plus one shared version/CLI-selector target. Unknown or ambiguous structures fail closed. Windows Store discovery and dependency preflight have been exercised on a real Windows installation; the main-process Inspector path still requires broader real-device validation before Windows is published as a supported GitHub Release asset.
 
 SpineCodex 0.3.3 reports product version `0.3.3` and Codex-compatible identity `0.147.0`; the App records both. OpenAI Codex `0.149.1` is not a SpineCodex validation baseline for this release. Image generation remains disabled pending a separate end-to-end generation, replay, Tree-update, and recovery gate. The machine-readable matrix is checked in as [`compatibility.json`](compatibility.json).
 

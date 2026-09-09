@@ -109,6 +109,9 @@ await copyFile(
   join(ROOT, "lib", "macos-inspector-clone.mjs"),
   join(wrapper, "lib", "macos-inspector-clone.mjs"),
 );
+for (const name of ["runtime-mode.mjs", "mac-shell-environment.mjs", "renderer-supervisor.mjs", "status-bar.mjs", "adapter-handshake.mjs"]) {
+  await copyFile(join(ROOT,"lib",name), join(wrapper,"lib",name));
+}
 await copyFile(join(ROOT, "LICENSE"), join(releaseRoot, "LICENSE"));
 await copyFile(join(ROOT, "NOTICE"), join(releaseRoot, "NOTICE"));
 await writeFile(join(releaseRoot, "README-Windows.txt"), windowsReadme());

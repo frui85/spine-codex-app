@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v0.3.3.6"><img alt="Release v0.3.3.6" src="https://img.shields.io/badge/release-v0.3.3.6-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231"><img alt="Release v26.901.51231" src="https://img.shields.io/badge/release-v26.901.51231-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES_ZH.md">查看全部功能</a>
 </p>
@@ -105,12 +105,33 @@ spine-codex --version
 
 | Mac | 下载 |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v0.3.3.6-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v0.3.3.6-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v0.3.3.6/SpineCodex-App-v0.3.3.6-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v26.901.51231-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v26.901.51231-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-x64.dmg) |
 
 发布包只包含本包装层及其私有 Node.js 运行时。**不会打包、下载或安装 Codex Desktop 和 SpineCodex。** 如果缺少任一依赖，内置诊断会一次性报告两项要求，并且不会修改系统。
 
 > 首个公开构建使用 ad-hoc 签名，因为项目暂时没有 Developer ID 证书。如果 macOS 阻止首次启动，请右键点击 App 并选择**打开**，或在**系统设置 → 隐私与安全性**中允许一次。两个 DMG 旁均提供 SHA-256 文件。
+
+### 适配基线与状态栏
+
+| CLI 来源 | SpineCodex 产品版本 | Codex CLI 兼容版本 |
+|---|---|---|
+| [官方](https://github.com/GhabiX/SpineCodex) | 0.3.3 | 0.147.0 |
+| [适配 fork](https://github.com/xiurui-pan/SpineCodex) | 0.4.1 | 0.153.4 |
+
+官方 0.3.3 的 Codex 基线较老，本版本同时适配 fork 0.4.1。后续官方 CLI 发布更新时继续回归适配官方版本。fork 支持作为补充，不会自动下载或替换你安装的 CLI。状态栏按产品及兼容版本匹配基线；匹配不等于二进制来源认证。
+
+启动后点击 macOS 菜单栏的 SpineCodex 图标，可查看当前模式、Desktop/CLI 版本、连接状态、适配说明，复制信息或切换模式。
+
+| 模式 | 行为与边界 |
+|---|---|
+| 副本模式（默认） | 保留 v0.3.3.6 的副本身份校验、主进程 hook、历史恢复及 SSH 启动保护 |
+| 外部适配器 | 使用原签名 Desktop；校验 zsh 命令解析和实际 adapter initialize；通过外部 CDP supervisor 恢复 Renderer |
+| 自动兜底 | 优先副本；启动失败且本次实例已退出后尝试外部适配器；状态栏显示实际模式和兜底原因 |
+
+切换会要求完整重启 Desktop，正在执行的任务可能中断。偏好仅在新模式启动成功后保存；失败时尝试恢复原模式。外部模式当前仅支持 zsh，不提供副本模式的历史回放/memory 恢复及 SSH bootstrap 补丁。它不会把本地 adapter 路径传到远端。
+
+偏好位于 `~/Library/Application Support/SpineCodex App/preferences.json`。命令行可通过 `--mode clone|adapter|auto` 覆盖本次启动；`--no-tray` 隐藏菜单栏入口；副本模式此时就绪后返回，外部模式仍常驻监控。诊断示例：`./spine-app --mode adapter --diagnose --json`。
 
 ### Windows x64 便携构建
 
@@ -160,9 +181,11 @@ SpineCodex App
        └─ turn/spineSpawnProgress/updated
 ```
 
-启动器不会修改 `app.asar`、替换 Codex React 树或对磁盘上的应用打补丁。Renderer 集成使用 Shadow DOM 和窄范围结构 hook。本地启动使用指向包装层私有 shim 的专用绝对路径，因此 Desktop 刷新登录 shell 环境时无法绕过输出过滤器。远程 SSH 保持便携命令名 `spine-codex`，由每台主机自己的登录 shell 解析。远程 bootstrap 是串行且幂等的：复用健康的 SpineCodex 服务，只替换同一用户的陈旧 socket owner 或官方 Codex owner，并在 Unix socket 可确认连接前不启动代理。一次性的启动器/主进程就绪握手会验证本地 selector、版本检查与 SSH bootstrap 结构；未知 bundle 会 fail closed。
+两种模式共享本地 app-server 协议适配和应用列表通知过滤，继续临时禁用 `image_generation`。副本模式保留进程内 hook 和事件驱动 Renderer 恢复，私有副本修改 Inspector fuse 并重新签名，原应用保持不变。
 
-经过验证的主进程 hook 还保留两个窄范围 Electron 生命周期监听器。它在启动时对打包的 `spine-view.js` 做 SHA-256 校验。每次主窗口完成 `did-finish-load` 时，包括 Electron Renderer 崩溃后的重新加载，hook 都会再次读取同一绝对资源路径，并且只在精确的 `app://-/index.html` 区域执行当前 Renderer。这可以防止长时间运行的主进程在安装包更新后恢复旧的内存内 Renderer 版本。整个过程没有定时器、轮询守护或额外常驻进程。Renderer 自身的 revision guard 保证首次 CDP 注入与后续恢复注入幂等。
+外部模式吸收官方 App `v26.901.20858` 的外部 adapter + Renderer supervisor 架构，修正了 PATH 中 adapter 已存在但不在首位的问题。启动前确认登录 shell 选择私有 adapter；启动后观察真实 app-server initialize 响应，才报告就绪。Supervisor 每秒查询主 Renderer target，注册幂等新文档脚本并监听页面加载，只连接回环地址与精确的 `app://-/index.html` 主页面。本次 Desktop 进程仍运行时会持续重连，不会因短暂 CDP 断连退出并提前删除 shell 环境。
+
+启动器现在保持运行以管理状态栏和重启事务；Desktop 正常退出后清理本次临时环境。模式切换按已启动 PID 和 bundle 路径正常退出对应实例，不强杀其他应用。正在运行的外部 supervisor 升级后需重启以载入新脚本。
 
 安全边界见 [SECURITY.md](SECURITY.md)，随包组件说明见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
@@ -172,27 +195,28 @@ SpineCodex App
 <summary><strong>从源码运行</strong></summary>
 
 ```sh
-git clone https://github.com/izumedonabe/spine-codex-app.git
+git clone https://github.com/frui85/spine-codex-app.git
 cd spine-codex-app
+npm run build:statusbar
 ./spine-app --diagnose
 ./spine-app
 ./spine-app /path/to/workspace
 ```
 
-源码运行要求 Node.js 22 或更高版本。不传路径时会打开现有 Codex 界面，不会创建以 `/` 为根目录的任务。启动器在验证主进程 hook 和首次 Renderer 注入后退出；Codex Desktop 会继续运行，进程内生命周期监听器会在 Electron 替换 Renderer 时恢复 Spine View。
+源码运行要求 Node.js 22 或更高版本。不传路径时会打开现有 Codex 界面，不会创建以 `/` 为根目录的任务。启动器常驻管理状态栏、模式切换与外部 Renderer supervisor；Desktop 退出后自动清理。macOS 源码运行状态栏需要 Xcode Command Line Tools，发布包已包含编译后的原生 helper。
 
 </details>
 
 <details>
 <summary><strong>构建、版本与兼容性</strong></summary>
 
-本版本为 **v0.3.3.6**：前三段表示推荐的 SpineCodex 正式验证基线，第四段表示仅 App 修订。最低兼容线仍为 SpineCodex 0.2.2。产品版本、Codex 兼容身份与最低支持版本分别记录；版本跟踪不代表本仓库重新分发 SpineCodex。
+本版本为 **v26.901.51231**：前三段与兼容目标 Codex Desktop 一致，遵循官方 SpineCodex App 的版本方向；同一 Desktop 的后续包装层修订可增加第四段，例如 `26.901.51231.1`。CLI 产品版本和 Codex CLI 兼容版本独立记录，不再用于 App 发版编号。历史版本保留原编号。
 
 推送匹配的 `v*` tag 会启动仓库内 GitHub Actions 发布流水线。工作流先校验 tag 与 `package.json#spineAppVersion`，运行完整检查，构建并验证两个 macOS DMG，上传不可变工作流资产，最后才发布 GitHub Release。Release 会先创建为草稿，避免上传失败时暴露不完整版本。Windows 工作流代码已保留，但有意禁用。
 
-当前 bundle 契约已在 ChatGPT/Codex Desktop `26.810.41047`、`26.818.41509`、`26.825.51511`、`26.901.20858` 与 `26.901.51231` 上验证。macOS 如果把 `nodeCliInspect` fuse 设为 `off` 或 `removed`，Electron 会忽略 `--inspect*` 和 `SIGUSR1`，无法原地注入主进程。此时 SpineCodex App 会在 `~/Library/Application Support/SpineCodex App/inspectable-desktop/` 准备一份私有的可注入克隆（APFS 克隆，只重新启用该 fuse，并做 hardened-runtime 的 ad-hoc 签名），以仅限回环地址的 `--inspect-brk` 端口暂停启动克隆、校验 PID，并在 Renderer 启动前注入 main hook。原始 `ChatGPT.app` 保持不变，Desktop 每次更新后都会重建克隆；设置 `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1` 则恢复 fail-closed 预检错误。诊断会只读扫描已安装 macOS `app.asar`，要求主进程补丁目标唯一，并要求版本检查与 CLI selector 共同位于唯一共享 bundle；未知或歧义结构会 fail closed。Windows Store 发现与依赖预检已在真实 Windows 环境验证；主进程 Inspector 路径仍需扩大真机验证后，才会把 Windows 作为受支持的 GitHub Release 资产发布。
+副本模式的历史 bundle 契约已在 ChatGPT/Codex Desktop `26.810.41047`、`26.818.41509`、`26.825.51511`、`26.901.20858` 与 `26.901.51231` 上验证。macOS 如果把 `nodeCliInspect` fuse 设为 `off` 或 `removed`，Electron 会忽略 `--inspect*` 和 `SIGUSR1`，无法原地注入主进程。此时 SpineCodex App 会在 `~/Library/Application Support/SpineCodex App/inspectable-desktop/` 准备一份私有的可注入克隆（APFS 克隆，只重新启用该 fuse，并做 hardened-runtime 的 ad-hoc 签名），以仅限回环地址的 `--inspect-brk` 端口暂停启动克隆、校验 PID，并在 Renderer 启动前注入 main hook。原始 `ChatGPT.app` 保持不变，Desktop 每次更新后都会重建克隆；设置 `SPINE_CODEX_DISABLE_DESKTOP_CLONE=1` 则恢复 fail-closed 预检错误。诊断会只读扫描已安装 macOS `app.asar`，要求主进程补丁目标唯一，并要求版本检查与 CLI selector 共同位于唯一共享 bundle；未知或歧义结构会 fail closed。Windows Store 发现与依赖预检已在真实 Windows 环境验证；主进程 Inspector 路径仍需扩大真机验证后，才会把 Windows 作为受支持的 GitHub Release 资产发布。
 
-SpineCodex 0.3.3 同时报告产品版本 `0.3.3` 与 Codex 兼容身份 `0.147.0`，App 会分别记录两者。OpenAI Codex `0.149.1` 不属于本版本的 SpineCodex 验证基线。图片生成在完成真实生成、消息回放、Tree 更新与恢复门禁前继续禁用。机器可读兼容矩阵见 [`compatibility.json`](compatibility.json)。
+CLI 基线以本页官方/fork 映射表为准；每次官方 CLI 更新后继续回归初始化、协议、Spine Tree、恢复和模式切换。图片生成在完成真实生成、消息回放、Tree 更新与恢复门禁前继续禁用。机器可读兼容矩阵见 [`compatibility.json`](compatibility.json)。
 
 ```sh
 npm run check

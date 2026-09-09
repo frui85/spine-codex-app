@@ -327,25 +327,25 @@ assert.match(wrapperSource, /MIN_SPINE_CODEX_VERSION = "0\.2\.2"/);
 assert.match(wrapperSource, /CODEX_CLI_PATH: REMOTE_CLI_NAME/);
 assert.match(wrapperSource, /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/);
 assert.match(wrapperSource, /PATH: appSearchPath/);
-assert.match(wrapperSource, /NODE_OPTIONS: nodeOptions/);
-assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION=/);
-assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS=/);
+assert.match(wrapperSource, /NODE_OPTIONS: mode === "adapter" \? "" : nodeOptions/);
+assert.match(wrapperSource, /SPINE_CODEX_MIN_VERSION:/);
+assert.match(wrapperSource, /SPINE_CODEX_MAIN_HOOK_STATUS:/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_PATH:/);
 assert.match(wrapperSource, /SPINE_CODEX_RENDERER_SHA256:/);
 assert.match(wrapperSource, /SPINE_CODEX_LOCAL_IDENTITY_JSON/);
 assert.match(wrapperSource, /prependRendererIdentity\(RENDERER_SOURCE, localIdentityJson\)/);
 assert.match(
   wrapperSource,
-  /createHash\("sha256"\)\.update\(RENDERER_SOURCE\)\.digest\("hex"\)/,
+  /createHash\("sha256"\)\s*\.update\(RENDERER_SOURCE\)\s*\.digest\("hex"\)/,
 );
 assert.match(wrapperSource, /SPINE_CODEX_SHIM_NODE: process\.execPath/);
 assert.match(
   wrapperSource,
-  /`SPINE_CODEX_LOCAL_CLI_PATH=\$\{appEnvironment\.SPINE_CODEX_LOCAL_CLI_PATH\}`/,
+  /SPINE_CODEX_LOCAL_CLI_PATH: LOCAL_CLI_SHIM/,
 );
 assert.match(
   wrapperSource,
-  /`SPINE_CODEX_SHIM_NODE=\$\{appEnvironment\.SPINE_CODEX_SHIM_NODE\}`/,
+  /SPINE_CODEX_SHIM_NODE: process\.execPath/,
 );
 assert.match(
   mainHookReadinessSource,

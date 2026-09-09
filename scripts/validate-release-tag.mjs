@@ -22,11 +22,9 @@ for (const field of semverFields) {
     throw new Error(`package.json ${field} is invalid: ${String(metadata[field])}`);
   }
 }
-if (metadata.version !== metadata.recommendedSpineCodexVersion) {
-  throw new Error("package version must match recommendedSpineCodexVersion");
-}
-if (!version.startsWith(`${metadata.recommendedSpineCodexVersion}.`)) {
-  throw new Error("spineAppVersion must track the recommended SpineCodex release");
+if (metadata.version !== metadata.supportedDesktopVersion ||
+    !(version === metadata.supportedDesktopVersion || version.startsWith(`${metadata.supportedDesktopVersion}.`))) {
+  throw new Error("App release version must track supportedDesktopVersion");
 }
 if (
   !Array.isArray(metadata.validatedDesktopVersions) ||

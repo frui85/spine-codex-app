@@ -42,7 +42,7 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const MAX_ROWS = 300;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "0.3.3.6";
+  const VERSION = "26.901.51231";
   const RENDERER_REVISION = 12;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -1671,6 +1671,7 @@
   }
 
   function syncReplayAliases() {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
     const bridge = window.electronBridge;
     if (typeof bridge?.sendMessageFromView !== "function") return false;
     Promise.resolve(bridge.sendMessageFromView({
@@ -1732,6 +1733,7 @@
   }
 
   function rememberOutgoingResume(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return;
     const message = event?.detail;
     const request = message?.request;
     const requestId = request?.id == null ? null : String(request.id);
@@ -1828,6 +1830,7 @@
   }
 
   function handleReplayRecoveryMessage(event) {
+    if (globalThis.__spineCodexRuntimeMode === "adapter") return false;
     const data = event?.data;
     adoptReplayAliasFromStatusNotification(data);
     const response = replayResponse(data);

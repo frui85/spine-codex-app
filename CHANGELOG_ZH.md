@@ -4,6 +4,14 @@
 
 ## 尚未发布
 
+## v26.901.51231 - 2026-09-09
+
+- App 版本号对齐兼容目标 Codex Desktop，CLI 双版本另行记录。
+- 明确官方 0.3.3 / Codex 0.147.0 和 xiurui-pan fork 0.4.1 / Codex 0.153.4 两条适配基线；官方更新后继续回归。
+- 新增 macOS 原生状态栏、适配信息、模式持久化、正常重启及切换失败回退。
+- 保留副本模式，吸收官方外部 CLI adapter / Renderer supervisor 为可选兜底，并核验 PATH 和真实 initialize。
+- target 查询调整为一秒间隔，Desktop 仍运行时持续尝试恢复连接。
+
 ## v0.3.3.6 - 2026-09-09
 
 修复私有 Desktop 副本独立变化后仍被误判为可复用，导致启动时报本地 CLI 标记缺失的问题。

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "spineCodexAppVersion": "0.3.3.6",
+  "spineCodexAppVersion": "26.901.51231",
   "local": {
     "minimumSpineCodexVersion": "0.2.2",
     "recommendedSpineCodexVersion": "0.3.3",
@@ -16,7 +16,8 @@
       "26.825.51511",
       "26.901.20858",
       "26.901.51231"
-    ]
+    ],
+    "supportedVersion": "26.901.51231"
   },
   "imageGeneration": {
     "status": "disabled-pending-end-to-end-validation"
@@ -27,5 +28,34 @@
       "version": "0.149.1",
       "reason": "not a SpineCodex compatibility baseline"
     }
-  ]
+  ],
+  "startupModes": {
+    "default": "clone",
+    "available": [
+      "clone",
+      "adapter",
+      "auto"
+    ],
+    "externalAdapterMinimumCompatibilityVersion": "0.147.0",
+    "adapterLimitations": [
+      "no-main-hook-replay-recovery",
+      "native-desktop-ssh-bootstrap",
+      "zsh-only"
+    ]
+  },
+  "cliBaselines": [
+    {
+      "source": "official",
+      "repository": "https://github.com/GhabiX/SpineCodex",
+      "productVersion": "0.3.3",
+      "compatibilityVersion": "0.147.0"
+    },
+    {
+      "source": "fork",
+      "repository": "https://github.com/xiurui-pan/SpineCodex",
+      "productVersion": "0.4.1",
+      "compatibilityVersion": "0.153.4"
+    }
+  ],
+  "officialRegressionPolicy": "Retest the official SpineCodex CLI after upstream updates; fork support is supplementary."
 }

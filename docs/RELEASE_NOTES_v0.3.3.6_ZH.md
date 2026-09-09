@@ -1,6 +1,8 @@
 # SpineCodex App v0.3.3.6 中文发布说明
 
 [English release notes](RELEASE_NOTES_v0.3.3.6.md)
+适配补充（2026-09-09）：官方 SpineCodex `0.3.3 → Codex CLI 0.147.0` 的基线较老；同时适配 [xiurui-pan/SpineCodex](https://github.com/xiurui-pan/SpineCodex) fork `0.4.1 → 0.153.4`。官方 CLI 更新后继续回归适配官方版本，fork 支持作为补充。后续 App 发版号对齐兼容目标 Desktop。
+
 
 修复私有 Desktop 副本独立变化后，启动器仍按原应用信息复用缓存，随后报
 `Codex local CLI error marker was not found` 的启动故障。
