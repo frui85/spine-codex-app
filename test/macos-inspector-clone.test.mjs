@@ -216,6 +216,7 @@ test("prepares, reuses, and rebuilds an inspectable clone without touching the s
     assert.equal(await readFuseState(cloneBinary, NODE_CLI_INSPECT_FUSE_INDEX), "on");
     assert.equal(await readFuseState(cloneBinary, 2), "off");
     assert.equal(await readFuseState(sourceBinary, NODE_CLI_INSPECT_FUSE_INDEX), "off");
+
     assert.equal(first.manifest.copyMode, "fake-copy");
     assert.equal(first.manifest.previousFuseState, "off");
     assert.equal(first.manifest.fuseName, "nodeCliInspect");
@@ -275,6 +276,29 @@ test("prepares, reuses, and rebuilds an inspectable clone without touching the s
     assert.equal(calls.filter(([kind]) => kind === "clone").length, 1);
     assert.equal(await readFuseState(cloneBinary, NODE_CLI_INSPECT_FUSE_INDEX), "on");
     assert.equal(await readFuseState(sourceBinary, NODE_CLI_INSPECT_FUSE_INDEX), "off");
+
+    // The private clone can update independently of the installed Desktop.
+    // Even if its Inspector fuse remains enabled, it must not be reused.
+    const cloneInfoPath = join(first.appPath, "Contents", "Info.json");
+    const cloneInfo = JSON.parse(await readFile(cloneInfoPath, "utf8"));
+    cloneInfo.CFBundleShortVersionString = "26.903.61454";
+    await writeFile(cloneInfoPath, JSON.stringify(cloneInfo));
+    const updatedClone = await prepareInspectableDesktopClone({ appPath, cloneRoot, tools, now });
+    assert.equal(updatedClone.reused, false);
+    assert.equal(updatedClone.manifest.cloneIdentity.desktopVersion, "26.901.51231");
+    assert.equal((await prepareInspectableDesktopClone({ appPath, cloneRoot, tools, now })).reused, true);
+
+    // Detect a changed archive even when its size and Info.plist are unchanged.
+    await writeFile(join(first.appPath, "Contents", "Resources", "app.asar"), Buffer.alloc(16, 0x41));
+    const changedArchive = await prepareInspectableDesktopClone({ appPath, cloneRoot, tools, now });
+    assert.equal(changedArchive.reused, false);
+    assert.equal((await readFile(join(appPath, "Contents", "Resources", "app.asar"))).equals(Buffer.alloc(16)), true);
+
+    // Existing installations have no signed-clone identity: rebuild once.
+    const legacyManifest = { ...changedArchive.manifest };
+    delete legacyManifest.cloneIdentity;
+    await writeFile(join(cloneRoot, "inspectable-clone.json"), JSON.stringify(legacyManifest));
+    assert.equal((await prepareInspectableDesktopClone({ appPath, cloneRoot, tools, now })).reused, false);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
