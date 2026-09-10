@@ -55,7 +55,7 @@ import {
 import { waitForAdapter } from "./lib/adapter-handshake.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "26.901.51231.1";
+const APP_VERSION = "26.901.51231.2";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,
@@ -350,20 +350,21 @@ async function startSession(diagnosis, mode, onHealth) {
         activeMode: mode,
         activeModeLabel: MODE_LABELS[mode],
         desktopVersion: diagnosis.desktopVersion,
-        productVersion: versionIdentity.productVersion ?? "未知",
+        productVersion: versionIdentity.productVersion ?? "Unknown",
         compatibilityVersion: versionIdentity.compatibilityVersion,
         baselineLabel: baseline
-          ? baseline.label + "（按版本匹配）"
-          : "当前 CLI 组合尚未回归",
+          ? baseline.label + " (version match)"
+          : "Current CLI combination has not been regression tested",
         desktopStatus:
           diagnosis.desktopVersion ===
           APP_VERSION.split(".").slice(0, 3).join(".")
-            ? "Desktop 与 App 目标版本匹配"
-            : "Desktop 非本次发布目标版本",
+            ? "Desktop matches the App target version"
+            : "Desktop differs from this release target",
+        fallbackReason: "",
         note:
           mode === "adapter"
-            ? "历史恢复与 SSH 增强：仅副本模式提供"
-            : "历史恢复与 SSH 增强：已启用",
+            ? "History recovery and SSH enhancements: clone mode only"
+            : "History recovery and SSH enhancements: enabled",
       },
     };
   } catch (error) {
@@ -407,7 +408,8 @@ async function runManagedApp() {
         tray?.update({
           error: "",
           note: "",
-          status: `正在启动${MODE_LABELS[mode]}…`,
+          fallbackReason: "",
+          status: "Starting Desktop…",
           activeModeLabel: MODE_LABELS[mode],
           desktopVersion: diagnosis.desktopVersion,
         });
@@ -419,13 +421,14 @@ async function runManagedApp() {
               tray?.update({
                 status:
                   health === "ready"
-                    ? "Renderer 已连接"
-                    : "正在恢复 Renderer 连接…",
+                    ? "Renderer connected"
+                    : "Reconnecting Renderer…",
                 error: detail ?? "",
               }),
           );
           if (lastError) {
-            session.info.note = `自动兜底：${lastError.message.slice(0, 80)}`;
+            session.info.note = "Automatic fallback:";
+            session.info.fallbackReason = lastError.message.slice(0, 80);
             console.log(`Automatic fallback to adapter: ${lastError.message}`);
           }
           session.done.then(async () => {
@@ -444,7 +447,7 @@ async function runManagedApp() {
           if (!args.userDataDir && isAppRunning(diagnosis.appPath)) throw error;
           if (modes.length > 1)
             tray?.update({
-              status: "副本启动失败，尝试外部适配器…",
+              status: "Clone startup failed; trying external adapter…",
               error: error.message,
             });
         }
@@ -478,7 +481,7 @@ async function runManagedApp() {
       appVersion: APP_VERSION,
       requestedMode: args.mode,
       busy: true,
-      status: "检查兼容性…",
+      status: "Checking compatibility…",
     });
   }
   const quit = async () => {

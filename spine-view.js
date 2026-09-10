@@ -42,7 +42,7 @@
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
   const RECENT_TREE_ROWS = 20;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "26.901.51231.1";
+  const VERSION = "26.901.51231.2";
   const RENDERER_REVISION = 14;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>

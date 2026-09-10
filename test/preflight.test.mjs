@@ -69,7 +69,7 @@ test("version command does not require installed dependencies", () => {
     env: { ...process.env, PATH: "/usr/bin:/bin" },
   });
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), "spine-app 26.901.51231.1");
+  assert.equal(result.stdout.trim(), "spine-app 26.901.51231.2");
 });
 
 test("JSON diagnosis has stable version, protocol, Desktop, and remote fields", async () => {
@@ -109,7 +109,7 @@ lines.on("line", (line) => {
     assert.equal(result.stderr, "");
     const diagnosis = JSON.parse(result.stdout);
     assert.equal(diagnosis.schemaVersion, 1);
-    assert.equal(diagnosis.app.version, "26.901.51231.1");
+    assert.equal(diagnosis.app.version, "26.901.51231.2");
     assert.equal(diagnosis.codexDesktop.inspectableClone, null);
     assert.deepEqual(
       {

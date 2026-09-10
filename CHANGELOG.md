@@ -4,6 +4,13 @@
 
 ## Unreleased
 
+## v26.901.51231.2 — 2026-09-10
+
+- Adds an English-first macOS menu with English, Simplified Chinese, and Follow System choices; unsupported system languages fall back to English.
+- Applies language changes immediately to menu/status text, confirmations, accessibility labels, and copied adaptation information, and remembers the preference across launches.
+- Uses the official Spine mark as the native macOS menu-bar icon.
+- Adds native Swift coverage for language resolution, preference persistence, and status translation.
+
 ## v26.901.51231.1 — 2026-09-10
 
 - Caps deep-tree indentation and clamps long labels to two lines, with full labels on hover and existing detail actions preserved.

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231.1"><img alt="Release v26.901.51231.1" src="https://img.shields.io/badge/release-v26.901.51231.1-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231.2"><img alt="Release v26.901.51231.2" src="https://img.shields.io/badge/release-v26.901.51231.2-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES_ZH.md">查看全部功能</a>
 </p>
@@ -117,8 +117,8 @@ spine-codex --version
 
 | Mac | 下载 |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v26.901.51231.1-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v26.901.51231.1-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v26.901.51231.2-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v26.901.51231.2-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-x64.dmg) |
 
 发布包只包含本包装层及其私有 Node.js 运行时。**不会打包、下载或安装 Codex Desktop 和 SpineCodex。** 如果缺少任一依赖，内置诊断会一次性报告两项要求，并且不会修改系统。
 
@@ -134,6 +134,8 @@ spine-codex --version
 官方 0.3.3 的 Codex 基线较老，本版本同时适配 fork 0.4.1。后续官方 CLI 发布更新时继续回归适配官方版本。fork 支持作为补充，不会自动下载或替换你安装的 CLI。状态栏按产品及兼容版本匹配基线；匹配不等于二进制来源认证。
 
 启动后点击 macOS 菜单栏的 SpineCodex 图标，可查看当前模式、Desktop/CLI 版本、连接状态、适配说明，复制信息或切换模式。
+
+菜单默认使用英文。通过 **Language / 语言** 子菜单，可选 **English**、**简体中文** 或 **跟随系统**。切换后菜单、状态窗口、确认弹窗及复制信息立即更新，无需重启 Desktop。跟随系统按 macOS 首选语言匹配：中文各区域变体使用简体中文，其余语言回退英文。选择独立于启动模式保存于 macOS 偏好域 `io.github.frui85.spine-status.preferences` 的 `menuLanguage` 键，后续启动继续生效。
 
 | 模式 | 行为与边界 |
 |---|---|
@@ -222,7 +224,7 @@ npm run build:statusbar
 <details>
 <summary><strong>构建、版本与兼容性</strong></summary>
 
-本版本为 **v26.901.51231.1**：前三段与兼容目标 Codex Desktop 一致，遵循官方 SpineCodex App 的版本方向；同一 Desktop 的后续包装层修订可增加第四段，例如 `26.901.51231.1`。CLI 产品版本和 Codex CLI 兼容版本独立记录，不再用于 App 发版编号。历史版本保留原编号。
+本版本为 **v26.901.51231.2**：前三段与兼容目标 Codex Desktop 一致，遵循官方 SpineCodex App 的版本方向；同一 Desktop 的后续包装层修订可增加第四段，例如 `26.901.51231.2`。CLI 产品版本和 Codex CLI 兼容版本独立记录，不再用于 App 发版编号。历史版本保留原编号。
 
 推送匹配的 `v*` tag 会启动仓库内 GitHub Actions 发布流水线。工作流先校验 tag 与 `package.json#spineAppVersion`，运行完整检查，构建并验证两个 macOS DMG，上传不可变工作流资产，最后才发布 GitHub Release。Release 会先创建为草稿，避免上传失败时暴露不完整版本。Windows 工作流代码已保留，但有意禁用。
 

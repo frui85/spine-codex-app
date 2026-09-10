@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231.1"><img alt="Release v26.901.51231.1" src="https://img.shields.io/badge/release-v26.901.51231.1-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231.2"><img alt="Release v26.901.51231.2" src="https://img.shields.io/badge/release-v26.901.51231.2-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-arm64.dmg"><strong>Download for Apple Silicon</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-x64.dmg"><strong>Download for Intel Mac</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES.md">Explore every feature</a>
 </p>
@@ -117,8 +117,8 @@ Download the DMG for your Mac, drag **SpineCodex App** to Applications, quit Cha
 
 | Mac | Download |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v26.901.51231.1-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v26.901.51231.1-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v26.901.51231.2-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v26.901.51231.2-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.2/SpineCodex-App-v26.901.51231.2-macos-x64.dmg) |
 
 The release packages contain only this wrapper and its private Node.js runtime. **Codex Desktop and SpineCodex are not bundled, downloaded, or installed.** If either is missing, the built-in doctor reports both requirements together and leaves the system unchanged.
 
@@ -134,6 +134,8 @@ The release packages contain only this wrapper and its private Node.js runtime. 
 Official 0.3.3 follows an older Codex baseline. Fork 0.4.1 supplements support for the newer CLI baseline; official CLI updates will continue to receive regression testing. The wrapper never automatically replaces your installed CLI. A version-pair match identifies an adaptation baseline, not binary provenance.
 
 The native menu bar shows actual startup mode, Desktop version, CLI product/compatibility versions, and connection health. It provides mode switching, restart, and copyable adaptation information.
+
+The menu defaults to English. Use **Language / 语言** to select **English**, **简体中文**, or **Follow System**. Changes apply immediately to the menu, status window, confirmations, and copied information without restarting Desktop. Follow System uses the primary macOS language: Chinese variants use Simplified Chinese; other languages fall back to English. The helper remembers this choice separately from startup mode in the macOS defaults domain `io.github.frui85.spine-status.preferences` (`menuLanguage`).
 
 - **Clone (default):** preserves private-clone validation, main-process hooks, replay/memory recovery, and SSH bootstrap protection.
 - **External adapter:** uses the original signed Desktop, verifies zsh PATH selection and actual adapter initialization, and supervises the Renderer through loopback CDP. Requires CLI compatibility 0.147.0 or newer. Clone-only replay recovery and SSH bootstrap patches are unavailable.
@@ -219,7 +221,7 @@ Source usage requires Node.js 22 or newer. Opening without a path launches the e
 <details>
 <summary><strong>Build, versioning, and compatibility</strong></summary>
 
-This release is **v26.901.51231.1**: the first three components match the target Codex Desktop version, following the official App's release convention. A later wrapper revision for the same Desktop can append a fourth component, for example `26.901.51231.1`. CLI product and compatibility versions remain separate metadata. Historical release numbers are preserved.
+This release is **v26.901.51231.2**: the first three components match the target Codex Desktop version, following the official App's release convention. A later wrapper revision for the same Desktop can append a fourth component, for example `26.901.51231.2`. CLI product and compatibility versions remain separate metadata. Historical release numbers are preserved.
 
 Pushing a matching `v*` tag starts the checked-in GitHub Actions release pipeline. The workflow validates the tag against `package.json#spineAppVersion`, runs the full checks, builds and verifies both macOS DMGs, uploads immutable workflow artifacts, and only then publishes the GitHub Release. Release creation begins as a draft so a failed upload cannot expose a partial release. Windows workflow code is present but intentionally disabled.
 

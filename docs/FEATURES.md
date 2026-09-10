@@ -4,7 +4,7 @@
 Startup mode scope: the replay recovery and SSH bootstrap enhancements below apply to **clone mode**. External adapter mode shares the Renderer UI and local protocol/output adapter, but has no main hook. The menu bar shows actual mode and the official 0.3.3 / CLI 0.147.0 or fork 0.4.1 / CLI 0.153.4 baseline match. See [release notes](RELEASE_NOTES_v26.901.51231.md) for switching and validation limits.
 
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v26.901.51231.1. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v26.901.51231.2. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
