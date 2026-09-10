@@ -17,6 +17,50 @@ if CommandLine.arguments.count == 4 && CommandLine.arguments[1] == "--terminate"
     exit(app.terminate() ? 0 : 3)
 }
 
+// Same 20×20 paths as SPINE_LOGO_MARKUP in renderer/00-runtime.jsfrag.
+// A template image lets macOS choose its menu-bar foreground in either theme.
+func spineStatusImage() -> NSImage {
+    let image = NSImage(size:NSSize(width:18, height:18), flipped:true) { _ in
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        let transform = NSAffineTransform()
+        transform.scaleX(by:0.9, yBy:0.9)
+        transform.concat()
+        NSColor.black.setStroke()
+        for center in [NSPoint(x:4,y:4.5), NSPoint(x:10,y:3.25), NSPoint(x:16,y:4.5)] {
+            let circle = NSBezierPath(ovalIn:NSRect(x:center.x-1.15,y:center.y-1.15,width:2.3,height:2.3))
+            circle.lineWidth = 1.3
+            circle.stroke()
+        }
+        let branches = NSBezierPath()
+        branches.lineWidth = 1.35
+        branches.lineCapStyle = .round
+        branches.lineJoinStyle = .round
+        branches.move(to:NSPoint(x:4.9,y:5.2))
+        branches.curve(to:NSPoint(x:10,y:10.6),controlPoint1:NSPoint(x:4.9,y:8.1),controlPoint2:NSPoint(x:7.2,y:9.2))
+        branches.move(to:NSPoint(x:10,y:4.4))
+        branches.line(to:NSPoint(x:10,y:10.6))
+        branches.move(to:NSPoint(x:15.1,y:5.2))
+        branches.curve(to:NSPoint(x:10,y:10.6),controlPoint1:NSPoint(x:15.1,y:8.1),controlPoint2:NSPoint(x:12.8,y:9.2))
+        branches.move(to:NSPoint(x:10,y:10.6))
+        branches.line(to:NSPoint(x:10,y:13))
+        branches.stroke()
+        let memory = NSBezierPath(roundedRect:NSRect(x:6.75,y:13,width:6.5,height:3.75),xRadius:1.6,yRadius:1.6)
+        memory.lineWidth = 1.35
+        memory.stroke()
+        let slot = NSBezierPath()
+        slot.lineWidth = 1.25
+        slot.lineCapStyle = .round
+        slot.move(to:NSPoint(x:8.75,y:14.9))
+        slot.line(to:NSPoint(x:11.25,y:14.9))
+        slot.stroke()
+        return true
+    }
+    image.isTemplate = true
+    image.accessibilityDescription = "SpineCodex 适配状态"
+    return image
+}
+
 final class StatusBar: NSObject, NSApplicationDelegate {
     var item: NSStatusItem!
     var state: [String: Any] = [:]
@@ -27,7 +71,7 @@ final class StatusBar: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: "SpineCodex 适配状态")
+        item.button?.image = spineStatusImage()
         if item.button?.image == nil { item.button?.title = "S" }
         item.button?.image?.isTemplate = true
         item.button?.setAccessibilityLabel("SpineCodex 适配状态")
