@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231"><img alt="Release v26.901.51231" src="https://img.shields.io/badge/release-v26.901.51231-6D5DFC?style=flat-square"></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/tag/v26.901.51231.1"><img alt="Release v26.901.51231.1" src="https://img.shields.io/badge/release-v26.901.51231.1-6D5DFC?style=flat-square"></a>
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-17171B?style=flat-square&logo=apple&logoColor=white">
   <img alt="Windows 10+" src="https://img.shields.io/badge/Windows-10%2B-17171B?style=flat-square&logo=windows&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-17171B?style=flat-square"></a>
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-arm64.dmg"><strong>下载 Apple Silicon 版本</strong></a>
   &nbsp;·&nbsp;
-  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
+  <a href="https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-x64.dmg"><strong>下载 Intel Mac 版本</strong></a>
   &nbsp;·&nbsp;
   <a href="docs/FEATURES_ZH.md">查看全部功能</a>
 </p>
@@ -52,6 +52,18 @@ SpineCodex 已经为长时间运行的 Codex 工作提供了真实结构：有�
   </tr>
 </table>
 
+## 长任务树与早期记录
+
+默认保留当前上下文投影末尾的 **20 条展示记录**，运行中、Spawn 进度及已选中项保持可见。点击“展开早期记录”查看被隐藏的记录，再次点击即可收起。它不代表 20 轮对话，也不会删除历史或触发上下文压缩；原有压缩分组、节点图标和操作含义保持不变。
+
+深层缩进不超过 42px，窄面板按比例进一步收缩；标题最多两行，悬停查看规范化后的完整标题，点击任务仍打开原生详情。深层行附“第 N 层”，指展示层级，不是执行次数或压缩次数。
+
+| 默认收起 | 展开早期记录 |
+|---|---|
+| ![最近20条的隔离渲染测试](docs/media/ui-review-20260910/01-collapsed.png) | ![展开80条的隔离渲染测试](docs/media/ui-review-20260910/02-expanded.png) |
+
+以上两图来自生产 Renderer 代码配合 80 层模拟数据的本地测试，不是真实会话截图。下方官方原始截图/GIF 保留用于介绍原生嵌入与节点语义，属于历史版本示例；其中旧版本号及“zero polling”不代表当前 App 全部运行模式。详细定义见[设计与官方语义核对](docs/SpineTree设计与官方语义核对_20260910.md)。
+
 ## 动态演示
 
 ![真实 Codex Desktop 会话中，Spine 压缩分组使用原生动效折叠](docs/media/spine-demo.gif)
@@ -80,7 +92,7 @@ Spine 控件位于 Codex 的 Model features 下方。设置按主机隔离，因
 
 - **固定与浮动摘要**：同一棵任务树可挂载到两种原生摘要区域。
 - **遵循 Codex 的语言和外观**：支持 10 种 App 语言，以及明暗配色、排版、动效变量和减少动态效果偏好。
-- **默认事件驱动**：没有守护进程、轮询循环、React Fiber 扫描或永久的整页观察器。
+- **树数据事件驱动**：不轮询任务数据，不扫描 React Fiber，也不永久观察整页。外部适配器模式另有每秒检查 Renderer target 的常驻 supervisor。
 - **本地与远程一致**：本地启动已安装的 SpineCodex，远程通过 Codex 原生 SSH 传输选择 `spine-codex`。
 - **有界且可回滚**：每个任务只保留最新快照，持久化有明确上限，不修改 `app.asar`，窄范围 hook 在结构未知时会 fail closed。
 
@@ -105,8 +117,8 @@ spine-codex --version
 
 | Mac | 下载 |
 |---|---|
-| Apple Silicon | [SpineCodex-App-v26.901.51231-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-arm64.dmg) |
-| Intel | [SpineCodex-App-v26.901.51231-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231/SpineCodex-App-v26.901.51231-macos-x64.dmg) |
+| Apple Silicon | [SpineCodex-App-v26.901.51231.1-macos-arm64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-arm64.dmg) |
+| Intel | [SpineCodex-App-v26.901.51231.1-macos-x64.dmg](https://github.com/frui85/spine-codex-app/releases/download/v26.901.51231.1/SpineCodex-App-v26.901.51231.1-macos-x64.dmg) |
 
 发布包只包含本包装层及其私有 Node.js 运行时。**不会打包、下载或安装 Codex Desktop 和 SpineCodex。** 如果缺少任一依赖，内置诊断会一次性报告两项要求，并且不会修改系统。
 
@@ -210,7 +222,7 @@ npm run build:statusbar
 <details>
 <summary><strong>构建、版本与兼容性</strong></summary>
 
-本版本为 **v26.901.51231**：前三段与兼容目标 Codex Desktop 一致，遵循官方 SpineCodex App 的版本方向；同一 Desktop 的后续包装层修订可增加第四段，例如 `26.901.51231.1`。CLI 产品版本和 Codex CLI 兼容版本独立记录，不再用于 App 发版编号。历史版本保留原编号。
+本版本为 **v26.901.51231.1**：前三段与兼容目标 Codex Desktop 一致，遵循官方 SpineCodex App 的版本方向；同一 Desktop 的后续包装层修订可增加第四段，例如 `26.901.51231.1`。CLI 产品版本和 Codex CLI 兼容版本独立记录，不再用于 App 发版编号。历史版本保留原编号。
 
 推送匹配的 `v*` tag 会启动仓库内 GitHub Actions 发布流水线。工作流先校验 tag 与 `package.json#spineAppVersion`，运行完整检查，构建并验证两个 macOS DMG，上传不可变工作流资产，最后才发布 GitHub Release。Release 会先创建为草稿，避免上传失败时暴露不完整版本。Windows 工作流代码已保留，但有意禁用。
 

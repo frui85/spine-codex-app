@@ -124,7 +124,6 @@
       const scopeKey = `${snapshot.threadId}:${parentId ?? "root"}`;
       const items = siblingItems(visibleTaskNodes(nodes), path, scopeKey);
       items.forEach((item, index) => {
-        if (rows.length >= MAX_ROWS) return;
         const last = index === items.length - 1;
         if (item.kind === "bucket") {
           rows.push({
@@ -197,7 +196,7 @@
       epochs.at(-1) ??
       null;
     const historicalEpochs = epochs.filter((epoch) => epoch !== currentEpoch);
-    if (historicalEpochs.length && rows.length < MAX_ROWS) {
+    if (historicalEpochs.length) {
       const epochKey = `${snapshot.threadId}:context-history`;
       const expanded = state.expandedEpochs.has(epochKey);
       const compactionCount =
@@ -218,7 +217,6 @@
       });
       if (expanded) {
         historicalEpochs.forEach((epoch, index) => {
-          if (rows.length >= MAX_ROWS) return;
           const contextEpochKey =
             `${snapshot.threadId}:context-epoch:${epoch.nodeId}`;
           const contextEpochExpanded = state.expandedEpochs.has(contextEpochKey);
@@ -242,7 +240,7 @@
             compactionNumber,
             taskCount,
           });
-          if (!contextEpochExpanded || rows.length >= MAX_ROWS) return;
+          if (!contextEpochExpanded) return;
           const epochChildren = children.get(epoch.nodeId) ?? [];
           walk(epochChildren, [false, contextEpochLast], epoch.nodeId);
           if (snapshot.activeNodeId === epoch.nodeId) {
@@ -251,34 +249,71 @@
         });
       }
     }
-    if (currentEpoch && rows.length < MAX_ROWS) {
+    const currentRowsStart = rows.length;
+    if (currentEpoch) {
       const epochChildren = children.get(currentEpoch.nodeId) ?? [];
       walk(epochChildren, [], currentEpoch.nodeId);
       if (snapshot.activeNodeId === currentEpoch.nodeId) {
         appendSpawnRows(rows, snapshot.threadId, []);
       }
     }
-    if (looseTasks.length && rows.length < MAX_ROWS) {
+    if (looseTasks.length) {
       walk(looseTasks, [], null);
     }
-    if (rows.length === MAX_ROWS) {
-      rows.push({
-        key: "limit",
-        kind: "limit",
-        icon: "more",
+    // Apply the recent window after projection, not during traversal: an old
+    // prefix must never exhaust the row budget before we reach the active tip.
+    // Historical compaction sections already have their own explicit controls.
+    return [
+      ...rows.slice(0, currentRowsStart),
+      ...projectRecentRows(rows.slice(currentRowsStart), snapshot.threadId),
+    ];
+  }
+
+  function setRecentHistoryExpanded(threadId, expanded) {
+    const key = normalizeThreadId(threadId);
+    if (!key) return false;
+    state.expandedRecentHistory.delete(key);
+    if (expanded) state.expandedRecentHistory.add(key);
+    while (state.expandedRecentHistory.size > MAX_THREADS) {
+      state.expandedRecentHistory.delete(state.expandedRecentHistory.values().next().value);
+    }
+    return true;
+  }
+
+  function projectRecentRows(rows, threadId) {
+    if (rows.length <= RECENT_TREE_ROWS) return rows;
+    const key = normalizeThreadId(threadId);
+    const selectedKey = state.selectedRows.get(key);
+    const cutoff = rows.length - RECENT_TREE_ROWS;
+    const retained = (row, index) => index >= cutoff || row.active ||
+      row.tone === "live" || row.kind === "spawn" || row.key === selectedKey;
+    const hiddenCount = rows.filter((row, index) => !retained(row, index)).length;
+    if (!hiddenCount) return rows;
+    const expanded = state.expandedRecentHistory.has(key);
+    return [
+      {
+        key: "recent-history",
+        kind: "recent-history",
+        expanded,
+        count: hiddenCount,
+        icon: "history",
         tone: "muted",
         depth: 0,
-        last: true,
-        label: t("context.additionalHidden"),
-      });
-    }
-    return rows;
+        last: false,
+        label: t(expanded ? "tree.hideEarlierRecords" : "tree.earlierRecords", {
+          count: formatInteger(hiddenCount),
+        }),
+        meta: t(expanded ? "tree.allRecords" : "tree.recentRecords", {
+          count: formatInteger(expanded ? rows.length : RECENT_TREE_ROWS),
+        }),
+      },
+      ...(expanded ? rows : rows.filter(retained)),
+    ];
   }
 
   function appendSpawnRows(rows, threadId, ancestors) {
     for (const progress of state.spawns.get(normalizeThreadId(threadId))?.values() ?? []) {
       progress.tasks.forEach((task, index) => {
-        if (rows.length >= MAX_ROWS) return;
         const visual = spawnVisual(task.status);
         rows.push({
           key: `spawn:${progress.callId}:${task.ordinal}`,

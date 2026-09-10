@@ -793,6 +793,12 @@
     if (!control) return;
     const action = control.dataset.spineAction;
     const threadId = normalizeThreadId(state.activeThreadId);
+    if (action === "toggle-recent-history") {
+      if (!threadId) return;
+      setRecentHistoryExpanded(threadId, !state.expandedRecentHistory.has(threadId));
+      renderActiveNow(true);
+      return;
+    }
     if (action === "toggle-bucket") {
       const bucketKey = control.dataset.bucketKey;
       if (!bucketKey) return;

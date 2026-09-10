@@ -278,8 +278,8 @@ assert.equal((source.match(/\$\{SPINE_LOGO_MARKUP\}/g) ?? []).length, 2);
 vm.runInThisContext(source, { filename: "spine_view.js" });
 
 const api = globalThis.__spineCodexViewV1;
-assert.equal(api.version, "26.901.51231");
-assert.equal(api.revision, 12);
+assert.equal(api.version, "26.901.51231.1");
+assert.equal(api.revision, 14);
 
 const recoveredThreadId = "00000000-0000-0000-0000-000000000099";
 const resumeRequest = {
@@ -1055,6 +1055,42 @@ assert.equal(rows.find((row) => row.nodeId === "1.3")?.depth, 0);
 assert.equal(rows.some((row) => row.label === "Verify" && row.icon === "running"), true);
 assert.equal(rows.some((row) => row.label === "Parallel check"), true);
 assert.equal(rows.some((row) => "prefix" in row || "marker" in row), false);
+// A deep history must show its latest records, even past the old 300-row
+// prefix limit. Expanding is presentation-only: node identities and depth stay.
+const deepThreadId = "00000000-0000-0000-0000-000000000066";
+const deepSnapshot = {
+  threadId: deepThreadId,
+  activeNodeId: "deep.349",
+  nodes: Array.from({length:350}, (_,index) => ({
+    nodeId:`deep.${index}`, parentId:index ? `deep.${index-1}` : null,
+    kind:"task", status:index===349 ? "live" : "closed",
+    summary:`Record ${index}`, start:index,
+  })),
+};
+const collapsedDeep = api.projectSnapshot(deepSnapshot);
+assert.equal(collapsedDeep.length,21);
+assert.equal(collapsedDeep[0].kind,"recent-history");
+assert.equal(collapsedDeep[0].count,330);
+assert.equal(collapsedDeep[1].nodeId,"deep.330");
+assert.equal(collapsedDeep.at(-1).nodeId,"deep.349");
+assert.equal(collapsedDeep.at(-1).icon,"running");
+assert.equal(collapsedDeep.at(-1).depth,349);
+assert.equal(api.setRecentHistoryExpanded(deepThreadId,true),true);
+const fullDeep = api.projectSnapshot(deepSnapshot);
+assert.equal(fullDeep.length,351);
+assert.equal(fullDeep[1].nodeId,"deep.0");
+assert.equal(fullDeep.at(-1).nodeId,"deep.349");
+assert.equal(api.projectSnapshot({...deepSnapshot,threadId:"other-thread"}).length,21);
+assert.equal(api.setRecentHistoryExpanded(deepThreadId,false),true);
+assert.deepEqual(api.projectSnapshot(deepSnapshot),collapsedDeep);
+const liveEarly = structuredClone(deepSnapshot);
+liveEarly.nodes[0].status="live";
+assert.equal(api.projectSnapshot(liveEarly).some(row=>row.nodeId==="deep.0"),true);
+const beforeProjection = JSON.stringify(deepSnapshot);
+api.projectSnapshot(deepSnapshot);
+assert.equal(JSON.stringify(deepSnapshot),beforeProjection);
+assert.equal(api.setRecentHistoryExpanded("",true),false);
+
 const historyBucket = rows.find((row) => row.kind === "bucket");
 assert.equal(typeof historyBucket?.bucketKey, "string");
 assert.equal(api.setBucketExpanded(historyBucket.bucketKey, true), true);
@@ -1483,8 +1519,8 @@ api.destroy();
 
 vm.runInThisContext(source, { filename: "spine_view_restored.js" });
 const restoredApi = globalThis.__spineCodexViewV1;
-assert.equal(restoredApi.version, "26.901.51231");
-assert.equal(restoredApi.revision, 12);
+assert.equal(restoredApi.version, "26.901.51231.1");
+assert.equal(restoredApi.revision, 14);
 assert.equal(
   restoredApi.exportSpawnIntents()[0][1].some(
     (intent) => intent.callId === "call_orphan-123" &&

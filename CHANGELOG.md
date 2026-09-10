@@ -4,6 +4,14 @@
 
 ## Unreleased
 
+## v26.901.51231.1 — 2026-09-10
+
+- Caps deep-tree indentation and clamps long labels to two lines, with full labels on hover and existing detail actions preserved.
+- Shows the latest 20 current-context projected records by default with an earlier-records toggle. Active/live nodes, Spawn rows and selected items remain visible.
+- Removes the first-300-row cutoff that could hide the current tip of a deep tree; explicit history expansion keeps earlier records accessible.
+- Keeps upstream node/Spawn icon mappings, compaction boundaries and existing actions unchanged.
+- Updates README examples with clearly labeled local test images and corrects polling documentation for external adapter mode.
+
 ## v26.901.51231 — 2026-09-09
 
 - Aligns App release numbering with the supported Codex Desktop version.

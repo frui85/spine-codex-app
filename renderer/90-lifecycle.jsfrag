@@ -288,6 +288,7 @@
     state.selectedRows.clear();
     state.expandedBuckets.clear();
     state.expandedEpochs.clear();
+    state.expandedRecentHistory.clear();
     state.expandedSubtrees.clear();
     state.subagentLabelAttempts = 0;
     if (state.subagentLabelFrame) cancelAnimationFrame(state.subagentLabelFrame);
@@ -393,6 +394,11 @@
     openNativeSubagent,
     nameSpawnThread: (hostId, task) => nameSpawnThread(hostId, task),
     setSpawnThreadName: (hostId, task) => setSpawnThreadName(hostId, task),
+    setRecentHistoryExpanded: (threadId, expanded = true) => {
+      if (!setRecentHistoryExpanded(threadId, expanded)) return false;
+      scheduleRender();
+      return true;
+    },
     setBucketExpanded: (bucketKey, expanded = true) => {
       if (typeof bucketKey !== "string" || !bucketKey) return false;
       if (expanded) state.expandedBuckets.add(bucketKey);

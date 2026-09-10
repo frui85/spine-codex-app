@@ -4,7 +4,7 @@
 模式范围：下文的回放恢复及 SSH bootstrap 增强适用于**副本模式**。外部模式共享 Renderer 界面和本地协议/输出适配，但不安装主进程 hook。状态栏显示实际模式和官方 0.3.3 / CLI 0.147.0 或 fork 0.4.1 / CLI 0.153.4 基线匹配。切换及验证边界见[发布说明](RELEASE_NOTES_v26.901.51231_ZH.md)。
 
 
-本文记录 SpineCodex App v26.901.51231 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
+本文记录 SpineCodex App v26.901.51231.1 的 Renderer、SSH、缓存、交互和性能行为。安装方式与发布边界见仓库[中文 README](../README_ZH.md)。
 
 本包装层使用现有的 `spine-codex` 二进制启动 Codex Desktop，并在 Codex 原生摘要面板中加入一个小型 Spine Tree 区域。它不会修改 `app.asar`、安装 Codex++、重新构建 SpineCodex，也不会留下守护进程。
 
@@ -151,3 +151,9 @@ Spine Tree 标题和工作区 tab 使用一个紧凑的手工标记：三个上�
 - `--app PATH`：选择 Codex/ChatGPT App bundle。
 - `--diagnose`：只验证路径和版本，不启动应用。
 - `--diagnose --json`：输出带版本的机器可读兼容报告。
+
+## 当前上下文的最近记录窗口
+
+默认显示投影末尾20条记录，额外保留 active/live、Spawn 和选中项。早期记录独立折叠，按会话保存本次 Renderer 内的展开状态；它不是压缩边界。原有历史上下文与同级分支入口继续独立工作。收起仅隐藏展示行，不删除快照或改变节点状态。
+
+深层行的视觉缩进上限为42px且不超过可用宽度18%，真实投影 depth 保留，标题最多两行，数量与层级信息位于标题下方。旧的“只投影前300行”截断已移除，避免历史过长时看不到活跃末端；用户主动展开时可能显示更多记录，极大实时树仍需后续性能回归。

@@ -55,7 +55,7 @@ import {
 import { waitForAdapter } from "./lib/adapter-handshake.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
-const APP_VERSION = "26.901.51231";
+const APP_VERSION = "26.901.51231.1";
 const LOCAL_CLI_DIR = join(HERE, "bin");
 const LOCAL_CLI_SHIM = join(
   LOCAL_CLI_DIR,

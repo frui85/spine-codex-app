@@ -40,10 +40,10 @@
   const MAX_SPAWN_INTENTS_PER_THREAD = 64;
   const MAX_SPAWN_INTENT_TASKS = 16;
   const MAX_SPAWN_INTENT_CACHE_CHARS = 500_000;
-  const MAX_ROWS = 300;
+  const RECENT_TREE_ROWS = 20;
   const MAX_VISIBLE_SIBLINGS = 3;
-  const VERSION = "26.901.51231";
-  const RENDERER_REVISION = 12;
+  const VERSION = "26.901.51231.1";
+  const RENDERER_REVISION = 14;
   const SPINE_LOGO_MARKUP = `
     <circle cx="4" cy="4.5" r="1.15" stroke="currentColor" stroke-width="1.3"/>
     <circle cx="10" cy="3.25" r="1.15" stroke="currentColor" stroke-width="1.3"/>
@@ -135,6 +135,11 @@
     "tree.showCompaction": "Show or hide tasks from before compaction {count}",
     "tree.showBranches": "Show or hide previous branches",
     "tree.viewDetails": "View details",
+    "tree.depth": "Level {count}",
+    "tree.earlierRecords": "Show {count} earlier records",
+    "tree.hideEarlierRecords": "Hide earlier records",
+    "tree.recentRecords": "Latest {count} records · active items kept visible",
+    "tree.allRecords": "All {count} records",
     "tree.empty": "This Spine Tree is empty.",
     "tree.nodes.one": "{count} node",
     "tree.nodes.other": "{count} nodes",
@@ -229,6 +234,11 @@
       "tree.showCompaction": "展开或收起第 {count} 次压缩前的任务",
       "tree.showBranches": "展开或收起先前分支",
       "tree.viewDetails": "查看节点详情",
+      "tree.depth": "第 {count} 层",
+      "tree.earlierRecords": "展开早期记录（{count} 条）",
+      "tree.hideEarlierRecords": "收起早期记录",
+      "tree.recentRecords": "最近 {count} 条 · 保留运行中节点",
+      "tree.allRecords": "全部 {count} 条记录",
       "tree.empty": "这个 Spine Tree 为空。",
       "tree.nodes.other": "{count} 个节点",
       "settings.title": "Spine 功能",
@@ -320,6 +330,11 @@
       "tree.showCompaction": "展開或收起第 {count} 次壓縮前的任務",
       "tree.showBranches": "展開或收起先前分支",
       "tree.viewDetails": "檢視節點詳情",
+      "tree.depth": "第 {count} 層",
+      "tree.earlierRecords": "展開早期記錄（{count} 條）",
+      "tree.hideEarlierRecords": "收起早期記錄",
+      "tree.recentRecords": "最近 {count} 條 · 保留執行中節點",
+      "tree.allRecords": "全部 {count} 條記錄",
       "tree.empty": "這個 Spine Tree 是空的。",
       "tree.nodes.other": "{count} 個節點",
       "settings.title": "Spine 功能",
@@ -1001,6 +1016,7 @@
     selectedRows: new Map(),
     expandedBuckets: new Set(),
     expandedEpochs: new Set(),
+    expandedRecentHistory: new Set(),
     expandedSubtrees: new Set(),
     threadAliases: readThreadAliases(),
     replayAliases: readReplayAliases(),
@@ -2448,7 +2464,6 @@
       const scopeKey = `${snapshot.threadId}:${parentId ?? "root"}`;
       const items = siblingItems(visibleTaskNodes(nodes), path, scopeKey);
       items.forEach((item, index) => {
-        if (rows.length >= MAX_ROWS) return;
         const last = index === items.length - 1;
         if (item.kind === "bucket") {
           rows.push({
@@ -2521,7 +2536,7 @@
       epochs.at(-1) ??
       null;
     const historicalEpochs = epochs.filter((epoch) => epoch !== currentEpoch);
-    if (historicalEpochs.length && rows.length < MAX_ROWS) {
+    if (historicalEpochs.length) {
       const epochKey = `${snapshot.threadId}:context-history`;
       const expanded = state.expandedEpochs.has(epochKey);
       const compactionCount =
@@ -2542,7 +2557,6 @@
       });
       if (expanded) {
         historicalEpochs.forEach((epoch, index) => {
-          if (rows.length >= MAX_ROWS) return;
           const contextEpochKey =
             `${snapshot.threadId}:context-epoch:${epoch.nodeId}`;
           const contextEpochExpanded = state.expandedEpochs.has(contextEpochKey);
@@ -2566,7 +2580,7 @@
             compactionNumber,
             taskCount,
           });
-          if (!contextEpochExpanded || rows.length >= MAX_ROWS) return;
+          if (!contextEpochExpanded) return;
           const epochChildren = children.get(epoch.nodeId) ?? [];
           walk(epochChildren, [false, contextEpochLast], epoch.nodeId);
           if (snapshot.activeNodeId === epoch.nodeId) {
@@ -2575,34 +2589,71 @@
         });
       }
     }
-    if (currentEpoch && rows.length < MAX_ROWS) {
+    const currentRowsStart = rows.length;
+    if (currentEpoch) {
       const epochChildren = children.get(currentEpoch.nodeId) ?? [];
       walk(epochChildren, [], currentEpoch.nodeId);
       if (snapshot.activeNodeId === currentEpoch.nodeId) {
         appendSpawnRows(rows, snapshot.threadId, []);
       }
     }
-    if (looseTasks.length && rows.length < MAX_ROWS) {
+    if (looseTasks.length) {
       walk(looseTasks, [], null);
     }
-    if (rows.length === MAX_ROWS) {
-      rows.push({
-        key: "limit",
-        kind: "limit",
-        icon: "more",
+    // Apply the recent window after projection, not during traversal: an old
+    // prefix must never exhaust the row budget before we reach the active tip.
+    // Historical compaction sections already have their own explicit controls.
+    return [
+      ...rows.slice(0, currentRowsStart),
+      ...projectRecentRows(rows.slice(currentRowsStart), snapshot.threadId),
+    ];
+  }
+
+  function setRecentHistoryExpanded(threadId, expanded) {
+    const key = normalizeThreadId(threadId);
+    if (!key) return false;
+    state.expandedRecentHistory.delete(key);
+    if (expanded) state.expandedRecentHistory.add(key);
+    while (state.expandedRecentHistory.size > MAX_THREADS) {
+      state.expandedRecentHistory.delete(state.expandedRecentHistory.values().next().value);
+    }
+    return true;
+  }
+
+  function projectRecentRows(rows, threadId) {
+    if (rows.length <= RECENT_TREE_ROWS) return rows;
+    const key = normalizeThreadId(threadId);
+    const selectedKey = state.selectedRows.get(key);
+    const cutoff = rows.length - RECENT_TREE_ROWS;
+    const retained = (row, index) => index >= cutoff || row.active ||
+      row.tone === "live" || row.kind === "spawn" || row.key === selectedKey;
+    const hiddenCount = rows.filter((row, index) => !retained(row, index)).length;
+    if (!hiddenCount) return rows;
+    const expanded = state.expandedRecentHistory.has(key);
+    return [
+      {
+        key: "recent-history",
+        kind: "recent-history",
+        expanded,
+        count: hiddenCount,
+        icon: "history",
         tone: "muted",
         depth: 0,
-        last: true,
-        label: t("context.additionalHidden"),
-      });
-    }
-    return rows;
+        last: false,
+        label: t(expanded ? "tree.hideEarlierRecords" : "tree.earlierRecords", {
+          count: formatInteger(hiddenCount),
+        }),
+        meta: t(expanded ? "tree.allRecords" : "tree.recentRecords", {
+          count: formatInteger(expanded ? rows.length : RECENT_TREE_ROWS),
+        }),
+      },
+      ...(expanded ? rows : rows.filter(retained)),
+    ];
   }
 
   function appendSpawnRows(rows, threadId, ancestors) {
     for (const progress of state.spawns.get(normalizeThreadId(threadId))?.values() ?? []) {
       progress.tasks.forEach((task, index) => {
-        if (rows.length >= MAX_ROWS) return;
         const visual = spawnVisual(task.status);
         rows.push({
           key: `spawn:${progress.callId}:${task.ordinal}`,
@@ -4222,6 +4273,12 @@
     if (!control) return;
     const action = control.dataset.spineAction;
     const threadId = normalizeThreadId(state.activeThreadId);
+    if (action === "toggle-recent-history") {
+      if (!threadId) return;
+      setRecentHistoryExpanded(threadId, !state.expandedRecentHistory.has(threadId));
+      renderActiveNow(true);
+      return;
+    }
     if (action === "toggle-bucket") {
       const bucketKey = control.dataset.bucketKey;
       if (!bucketKey) return;
@@ -4578,7 +4635,7 @@
     const root = host.attachShadow({ mode: "open" });
     root.innerHTML = `
       <style>
-        :host { display: block; color: var(--color-token-text-primary, inherit); font-family: inherit;
+        :host { display: block; min-width: 0; max-width: 100%; color: var(--color-token-text-primary, inherit); font-family: inherit;
           color-scheme: light dark; }
         * { box-sizing: border-box; }
         button { font: inherit; }
@@ -4617,11 +4674,12 @@
         .content { padding: 1px 10px 2px 11px; content-visibility: auto; contain: layout style; }
         .tree-motion { position: relative; min-width: 0; }
         .tree { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-        .row { --depth: 0; position: relative; min-height: 23px; display: grid;
-          width: calc(100% - var(--depth) * 14px);
-          grid-template-columns: 16px minmax(0, 1fr) auto 13px;
-          align-items: start; gap: 5px; border: 0; background: transparent; text-align: left;
-          margin-left: calc(var(--depth) * 14px); padding: 2px 4px 2px 2px; border-radius: 5px;
+        .row { --depth: 0; --indent: min(calc(var(--depth) * 14px), 42px, 18%);
+          position: relative; min-width: 0; min-height: 23px; display: grid;
+          width: calc(100% - var(--indent));
+          grid-template-columns: 16px minmax(0, 1fr) 13px;
+          align-items: start; column-gap: 5px; row-gap: 0; border: 0; background: transparent; text-align: left;
+          margin-left: var(--indent); padding: 2px 4px 2px 2px; border-radius: 5px;
           color: var(--color-token-text-secondary, currentColor); font-size: 12.5px; line-height: 19px;
           cursor: pointer; transform-origin: center;
           transition: background-color var(--transition-duration-basic, .15s)
@@ -4643,14 +4701,17 @@
         .row.active, .row.selected { color: var(--color-token-text-primary, currentColor); }
         .row.limit { cursor: default; grid-template-columns: 16px minmax(0, 1fr); }
         .row.limit:hover { background: transparent; }
-        .row.context-history { min-height: 25px; margin-bottom: 2px; padding-top: 3px; padding-bottom: 3px;
+        .row.context-history, .row.recent-history { min-height: 25px; margin-bottom: 2px; padding-top: 3px; padding-bottom: 3px;
           color: var(--color-token-text-tertiary, currentColor); }
         .row.context-history .label, .row.context-epoch .label {
           font-size: 11.5px; line-height: 19px; font-weight: 500; }
         .row.context-epoch { color: var(--color-token-text-tertiary, currentColor); }
-        .row-meta { color: var(--color-token-text-tertiary, currentColor);
-          font-size: 10.5px; line-height: 19px; white-space: nowrap; }
-        .status-icon { width: 16px; height: 19px; display: grid; place-items: center;
+        .row-meta { grid-column: 2; grid-row: 2; min-width: 0;
+          color: var(--color-token-text-tertiary, currentColor);
+          font-size: 10.5px; line-height: 17px; overflow: hidden;
+          text-overflow: ellipsis; white-space: nowrap; }
+        .row-meta:empty { display: none; }
+        .status-icon { grid-column: 1; grid-row: 1; width: 16px; height: 19px; display: grid; place-items: center;
           color: var(--color-token-text-tertiary, currentColor); }
         .status-icon svg { width: 15px; height: 15px; fill: none; stroke: currentColor;
           stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
@@ -4663,8 +4724,10 @@
           var(--color-token-editor-warning-foreground, #e25507)); }
         .status-icon.muted { color: var(--color-token-text-tertiary,
           color-mix(in srgb, currentColor 50%, transparent)); }
-        .label { min-width: 0; overflow-wrap: anywhere; }
-        .row-affordance { width: 13px; height: 19px; display: grid; place-items: center;
+        .label { grid-column: 2; grid-row: 1; min-width: 0; overflow-wrap: anywhere;
+          display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+          overflow: hidden; max-height: 38px; }
+        .row-affordance { grid-column: 3; grid-row: 1; width: 13px; height: 19px; display: grid; place-items: center;
           color: var(--color-token-text-tertiary, currentColor); opacity: 0;
           transition: opacity var(--default-transition-duration, .15s)
             var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)),
@@ -4672,10 +4735,11 @@
             var(--default-transition-timing-function, cubic-bezier(.4, 0, .2, 1)); }
         .row-affordance svg { width: 12px; height: 12px; fill: none; stroke: currentColor;
           stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+        .row.limit .row-affordance { display: none; }
         .row:hover .row-affordance, .row:focus-visible .row-affordance,
         .row.selected .row-affordance, .row.bucket .row-affordance,
         .row.context-history .row-affordance,
-        .row.context-epoch .row-affordance { opacity: 1; }
+        .row.context-epoch .row-affordance, .row.recent-history .row-affordance { opacity: 1; }
         .row[aria-expanded="true"] .row-affordance { transform: rotate(90deg); }
         .empty { padding: 9px 4px 11px; color: var(--color-token-text-tertiary, currentColor);
           font-size: 12.5px; line-height: 18px; }
@@ -5104,7 +5168,11 @@
       row.style.setProperty("--depth", String(item.depth));
       row.dataset.depth = String(item.depth);
       row.dataset.last = String(Boolean(item.last));
-      if (item.kind === "context-history") {
+      if (item.kind === "recent-history") {
+        row.dataset.spineAction = "toggle-recent-history";
+        row.setAttribute("aria-expanded", String(item.expanded));
+        row.title = item.label;
+      } else if (item.kind === "context-history") {
         row.dataset.spineAction = "toggle-context-history";
         row.dataset.epochKey = item.epochKey;
         delete row.dataset.bucketKey;
@@ -5148,7 +5216,17 @@
         row.dataset.icon = item.icon;
       }
       row.children[1].textContent = item.label;
-      row.children[2].textContent = item.meta ?? "";
+      // Keep the real depth for projection/navigation; only visual indentation
+      // is capped. Deep rows disclose their level without squeezing the title.
+      const depthLabel = item.depth > 3
+        ? t("tree.depth", { count: formatInteger(item.depth + 1) })
+        : "";
+      row.children[1].title = item.label;
+      row.children[2].textContent = [depthLabel, item.meta].filter(Boolean).join(" · ");
+      row.children[2].title = row.children[2].textContent;
+      if (row.dataset.spineAction) {
+        row.title = [item.label, depthLabel, row.title].filter(Boolean).join("\n");
+      }
       fragment.append(row);
     }
     for (const [key] of state.rows) {
@@ -6238,6 +6316,7 @@
     state.selectedRows.clear();
     state.expandedBuckets.clear();
     state.expandedEpochs.clear();
+    state.expandedRecentHistory.clear();
     state.expandedSubtrees.clear();
     state.subagentLabelAttempts = 0;
     if (state.subagentLabelFrame) cancelAnimationFrame(state.subagentLabelFrame);
@@ -6343,6 +6422,11 @@
     openNativeSubagent,
     nameSpawnThread: (hostId, task) => nameSpawnThread(hostId, task),
     setSpawnThreadName: (hostId, task) => setSpawnThreadName(hostId, task),
+    setRecentHistoryExpanded: (threadId, expanded = true) => {
+      if (!setRecentHistoryExpanded(threadId, expanded)) return false;
+      scheduleRender();
+      return true;
+    },
     setBucketExpanded: (bucketKey, expanded = true) => {
       if (typeof bucketKey !== "string" || !bucketKey) return false;
       if (expanded) state.expandedBuckets.add(bucketKey);

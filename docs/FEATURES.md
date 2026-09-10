@@ -4,7 +4,7 @@
 Startup mode scope: the replay recovery and SSH bootstrap enhancements below apply to **clone mode**. External adapter mode shares the Renderer UI and local protocol/output adapter, but has no main hook. The menu bar shows actual mode and the official 0.3.3 / CLI 0.147.0 or fork 0.4.1 / CLI 0.153.4 baseline match. See [release notes](RELEASE_NOTES_v26.901.51231.md) for switching and validation limits.
 
 
-This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v26.901.51231. For installation and release boundaries, see the repository [README](../README.md).
+This document records the renderer, SSH, cache, interaction, and performance behavior behind SpineCodex App v26.901.51231.1. For installation and release boundaries, see the repository [README](../README.md).
 
 This wrapper launches Codex Desktop with your existing `spine-codex` binary and
 adds a small Spine Tree section to Codex's native summary panel. It does not
@@ -466,3 +466,9 @@ Options:
 - `--app PATH`: choose the Codex/ChatGPT app bundle.
 - `--diagnose`: validate paths and versions without launching.
 - `--diagnose --json`: emit the versioned machine-readable compatibility report.
+
+## Current-context recent record window
+
+The latest 20 projected rows are visible by default, along with active/live, Spawn and selected items. Earlier rows have their own per-thread toggle for the current Renderer lifetime. This is separate from compaction groups and sibling buckets and never mutates snapshot/node status.
+
+Indentation is limited to 42px or 18% of available width, preserving projection depth; labels occupy up to two lines and metadata sits below them. The old first-300-row cutoff is removed so deep active tips remain reachable. Explicit expansion can render more rows; very large live trees still need further performance validation.
